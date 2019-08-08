@@ -1,11 +1,63 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)mtio.h	7.1 (Berkeley) 6/4/86
+ *	@(#)mtio.h	6.3 (Berkeley) 6/8/85
+ */
+#if	CMU
+/*
+ ************************************************************************
+ * HISTORY
+ * 22-Mar-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Merged VM and Romp versions.
+ *
+ * 18-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Added defintions of MTERAGE and MTRETENSION for Sailboat under
+ *	switch romp.
+ *
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3
+ *
+ * 15-Jun-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	NTMS:  Added MT_ISTMSCP for tmscp driver.  NOTE:  It is defined as 8
+ *	here but is 6 in Ultrix.
+ ************************************************************************
  */
 
+#ifdef	KERNEL
+#include "tms.h"
+#else	KERNEL
+#include <sys/features.h>
+#endif	KERNEL
+#endif	CMU
 /*
  * Structures and definitions for mag tape io control commands
  */
@@ -25,8 +77,10 @@ struct	mtop	{
 #define MTREW	5	/* rewind */
 #define MTOFFL	6	/* rewind and put the drive offline */
 #define MTNOP	7	/* no operation, sets status only */
-#define MTCACHE	8	/* enable controller cache */
-#define MTNOCACHE 9	/* disable controller cache */
+#ifdef	romp
+#define MTERASE 8	/* for streamer: erase tape */
+#define MTRETENSION 9	/* for streamer: retension tape */
+#endif	romp
 
 /* structure for MTIOCGET - mag tape get status command */
 
@@ -44,17 +98,21 @@ struct	mtget	{
 };
 
 /*
- * Constants for mt_type byte.  These are the same
- * for controllers compatible with the types listed.
+ * Constants for mt_type byte
  */
-#define	MT_ISTS		0x01		/* TS-11 */
-#define	MT_ISHT		0x02		/* TM03 Massbus: TE16, TU45, TU77 */
-#define	MT_ISTM		0x03		/* TM11/TE10 Unibus */
-#define	MT_ISMT		0x04		/* TM78/TU78 Massbus */
-#define	MT_ISUT		0x05		/* SI TU-45 emulation on Unibus */
-#define	MT_ISCPC	0x06		/* SUN */
-#define	MT_ISAR		0x07		/* SUN */
-#define	MT_ISTMSCP	0x08		/* DEC TMSCP protocol (TU81, TK50) */
+#define	MT_ISTS		0x01
+#define	MT_ISHT		0x02
+#define	MT_ISTM		0x03
+#define	MT_ISMT		0x04
+#define	MT_ISUT		0x05
+#define	MT_ISCPC	0x06
+#define	MT_ISAR		0x07
+#if	NTMS > 0
+#define MT_ISTMSCP	0x08
+#endif	NTMS > 0
+#ifdef	romp
+#define	MT_ISST		0x08
+#endif	romp
 
 /* mag tape io control commands */
 #define	MTIOCTOP	_IOW(m, 1, struct mtop)		/* do a mag tape op */

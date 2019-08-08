@@ -1,10 +1,64 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)vm_page.c	7.1 (Berkeley) 6/5/86
+ *	@(#)vm_page.c	6.16 (Berkeley) 7/15/85
  */
+#if	CMU
+
+/*
+ **********************************************************************
+ * HISTORY
+ * 22-Mar-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Merged VM and Romp versions.
+ *
+ * 14-Mar-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Merged in ROMP vs. 4.2 changes under switch romp.
+ *
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 10-Sep-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Updated for master/slave operation.
+ **********************************************************************
+ *
+ */
+
+#include "mach_mp.h"
+#include "mach_load.h"
+#include "mach_vm.h"
+#endif	CMU
+
+#if	MACH_VM
+#else	MACH_VM
 
 #include "../machine/reg.h"
 #include "../machine/pte.h"
@@ -21,6 +75,15 @@
 #include "vm.h"
 #include "file.h"
 #include "trace.h"
+#if	defined(romp) && defined(PGINPROF)
+#undef	PGINPROF
+#endif	romp && PGINPROF
+#ifdef	romp
+#ifdef	DEBUG
+#include "../machine/debug.h"
+#endif	DEBUG
+#include "../machine/rosetta.h"
+#endif	romp
 
 int	nohash = 0;
 /*
@@ -71,7 +134,8 @@ pagein(virtaddr, dlyu)
 {
 	register struct proc *p;
 	register struct pte *pte;
-	register unsigned v;
+	register struct inode *ip;
+	register u_int v;
 	unsigned pf;
 	int type, fileno;
 	struct pte opte;
@@ -83,13 +147,12 @@ pagein(virtaddr, dlyu)
 	int j;
 	daddr_t bn, bncache, bnswap;
 	int si, sk;
-	int swerror = 0;
 #ifdef PGINPROF
 #include "../vax/mtpr.h"
 	int otime, olbolt, oicr, s;
 	long a;
 
-	s = splclock();
+	s = spl6();
 	otime = time, olbolt = lbolt, oicr = mfpr(ICR);
 #endif
 	cnt.v_faults++;
@@ -101,13 +164,25 @@ pagein(virtaddr, dlyu)
 	p = u.u_procp;
 	if (isatsv(p, v))
 		type = CTEXT;
-	else if (isassv(p, v))
-		type = CSTACK;
-	else
+	else if (isadsv(p, v))
 		type = CDATA;
+#ifdef	romp
+	else if (isassv(p,v))
+		type = CSTACK;
+	else	return(-1);
+#else	romp
+	else
+		type = CSTACK;
+#endif	romp
 	pte = vtopte(p, v);
+#if	MACH_MP
+	if (pte->pg_v) {
+		return;
+	}
+#else	MACH_MP
 	if (pte->pg_v)
 		panic("pagein");
+#endif	MACH_MP
 
 	/*
 	 * If page is reclaimable, reclaim it.
@@ -134,9 +209,15 @@ valid:
 					}
 					c->c_lock = 1;
 				}
+#ifndef	romp
 				newptes(pte, v, CLSIZE);
+#endif	romp
 				cnt.v_intrans++;
+#ifndef	romp
 				return;
+#else	romp
+				return(0); /*The 0 is to make the romp happy*/
+#endif	romp
 			}
 			goto restart;
 		}
@@ -163,7 +244,7 @@ valid:
 			pte->pg_m = 1;
 		distcl(pte);
 		if (type == CTEXT)
-			distpte(p->p_textp, (unsigned)vtotp(p, v), pte);
+			distpte(p->p_textp, vtotp(p, v), pte);
 		u.u_ru.ru_minflt++;
 		cnt.v_pgrec++;
 		if (dlyu) {
@@ -183,7 +264,11 @@ valid:
 			vmfltmon(rmon, a, rmonmin, rres, NRMON);
 		splx(s);
 #endif
+#ifndef	romp
 		return;
+#else	romp
+		return(0);	/* 0 makes the romp happy. */
+#endif	romp
 	}
 #ifdef PGINPROF
 	splx(s);
@@ -249,6 +334,9 @@ valid:
 				pte++;
 			}
 			pte -= CLSIZE;
+#ifdef	romp
+			pf -= CLSIZE;  /* added 5/84 for	romp */
+#endif	romp
 			c->c_free = 0;
 			c->c_gone = 0;
 			if (c->c_intrans || c->c_want)
@@ -257,6 +345,10 @@ valid:
 			if (c->c_page != vtotp(p, v))
 				panic("pagein c_page chgd");
 			c->c_ndx = p->p_textp - &text[0];
+#ifdef	romp
+                       (((struct ipt_entry *)RTA_HATIPT)+pf)->ipt_sid =
+                               make410sid(p->p_textp);
+#endif	romp
 			if (dev == swapdev) {
 				cnt.v_xsfrec++;
 				pgtrace(TR_XSFREC);
@@ -314,7 +406,7 @@ valid:
 	distcl(pte);
 	if (type == CTEXT) {
 		p->p_textp->x_rssize += CLSIZE;
-		distpte(p->p_textp, (unsigned)vtotp(p, v), pte);
+		distpte(p->p_textp, vtotp(p, v), pte);
 	} else
 		p->p_rssize += CLSIZE;
 
@@ -387,7 +479,7 @@ valid:
 	}
 
 	distcl(pte);
-	swerror = swap(p, bn, ptob(v), klsize * ctob(CLSIZE),
+	swap(p, bn, ptob(v), klsize * ctob(CLSIZE),
 	    B_READ, B_PGIN, dev, 0); 
 #ifdef TRACE
 	trace(TR_PGINDONE, vsave, u.u_procp->p_pid);
@@ -418,11 +510,9 @@ skipswap:
 	pte->pg_v = 1;
 	distcl(pte);
 	if (type == CTEXT) {
-		if (swerror == 0) {
-			distpte(p->p_textp, (unsigned)vtotp(p, vsave), pte);
-			if (opte.pg_fod)
-				p->p_textp->x_flag |= XWRIT;
-		}
+		distpte(p->p_textp, vtotp(p, vsave), pte);
+		if (opte.pg_fod)
+			p->p_textp->x_flag |= XWRIT;
 		wakeup((caddr_t)p->p_textp);
 	}
 
@@ -437,8 +527,7 @@ skipswap:
 	for (i = 0; i < klsize; i++) {
 		c = &cmap[pgtocm(pte->pg_pfnum)];
 		c->c_intrans = 0;
-		if (type == CTEXT && c->c_blkno == 0 && bncache && !nohash &&
-		    !swerror) {
+		if (type == CTEXT && c->c_blkno == 0 && bncache && !nohash) {
 			mhash(c, dev, bncache);
 			bncache += btodb(CLBYTES);
 		}
@@ -482,6 +571,9 @@ skipswap:
 		dpageout(p, (k + klsdist) * klseql * CLSIZE, klout*CLSIZE);
 #endif
 	}
+#ifdef	romp
+	return(0);	/* 0 to make romp happy. */
+#endif	romp
 }
 
 /*
@@ -530,7 +622,7 @@ dpageout(p, dp, n)
 				&klsize, klout, (daddr_t)0);
 			/* THIS ASSUMES THAT p == u.u_procp */
 			daddr = vtod(p, v, &u.u_dmap, &u.u_smap);
-			(void)swap(p, daddr, ptob(v), klsize * ctob(CLSIZE),
+			swap(p, daddr, ptob(v), klsize * ctob(CLSIZE),
 			    B_WRITE, B_DIRTY, swapdev, pte->pg_pfnum);
 		} else {
 			if (c->c_gone == 0)
@@ -541,8 +633,8 @@ dpageout(p, dp, n)
 	}
 }
 		    
-unsigned maxdmap;
-unsigned maxtsize;
+int	maxdmap;
+int	maxtsize;
 
 /*
  * Setup the paging constants for the clock algorithm.
@@ -614,18 +706,18 @@ vminit()
                 dmmin = DMMIN;
         if (dmmax == 0) {
                 dmmax = DMMAX;
-		while (dmapsize(dmmin, dmmax / 2) >= MAXDSIZ && dmmax > dmmin)
+		while (dmapsize(dmmin, dmmax / 2) >= MAXDSIZ)
 			dmmax /= 2;
 	}
-	maxdmap = dmapsize(dmmin, dmmax);
+	maxdmap = ctob(dmapsize(dmmin, dmmax));
         if (dmtext == 0)
                 dmtext = DMTEXT;
         if (dmtext > dmmax)
                 dmtext = dmmax;
 	if (maxtsize == 0)
 		maxtsize = MAXTSIZ;
-	if (maxtsize > dtob(NXDAD * dmtext))
-		maxtsize = dtob(NXDAD * dmtext);
+	if (maxtsize > NXDAD * dmtext)
+		maxtsize = NXDAD * dmtext;
 
 	/*
 	 * Set up the initial limits on process VM.
@@ -634,27 +726,27 @@ vminit()
 	 * any single, large process to start random page
 	 * replacement once it fills memory.
 	 */
-        u.u_rlimit[RLIMIT_STACK].rlim_cur = DFLSSIZ;
-        u.u_rlimit[RLIMIT_STACK].rlim_max = MIN(MAXSSIZ, maxdmap);
-        u.u_rlimit[RLIMIT_DATA].rlim_cur = DFLDSIZ;
-        u.u_rlimit[RLIMIT_DATA].rlim_max = MIN(MAXDSIZ, maxdmap);
+        u.u_rlimit[RLIMIT_STACK].rlim_cur = ctob(DFLSSIZ);
+        u.u_rlimit[RLIMIT_STACK].rlim_max = min(ctob(MAXSSIZ), maxdmap);
+        u.u_rlimit[RLIMIT_DATA].rlim_cur = ctob(DFLDSIZ);
+        u.u_rlimit[RLIMIT_DATA].rlim_max = min(ctob(MAXDSIZ), maxdmap);
 	u.u_rlimit[RLIMIT_RSS].rlim_cur = u.u_rlimit[RLIMIT_RSS].rlim_max =
 		ctob(LOOPPAGES - desfree);
 	proc[0].p_maxrss = LOOPPAGES - desfree;
 }
 
-dmapsize(dmin, dmax)
-	int dmin, dmax;
+dmapsize(min, max)
+	int min, max;
 {
 	register int i, blk, size = 0;
 
-	blk = dmin;
+	blk = min;
 	for (i = 0; i < NDMAP; i++) {
 		size += blk;
-		if (blk < dmax)
+		if (blk < max)
 			blk *= 2;
 	}
-	return (dtob(size));
+	return (size);
 }
 
 int	pushes;
@@ -681,7 +773,11 @@ int	pushes;
 pageout()
 {
 	register int count;
+#if	MACH_LOAD
+	register int maxhand = pgtocm(maxfree + loadpg);
+#else	MACH_LOAD
 	register int maxhand = pgtocm(maxfree);
+#endif	MACH_LOAD
 	register int fronthand, backhand;
 
 	/*
@@ -702,7 +798,7 @@ loop:
 	 *
 	 * N.B.: We guarantee never to block while the cleaned list is nonempty.
 	 */
-	(void) splbio();
+	(void) splhigh();
   	if (bclnlist != NULL) {
  		(void) spl0();
   		cleanup();
@@ -810,6 +906,7 @@ top:
 	 * If this pte is not valid, then it must be reclaimable
 	 * and we can add it to the free list.
 	 */
+#ifndef	romp
 	if (pte->pg_v) {
 		if (whichhand == BACK)
 			return(0);
@@ -818,7 +915,11 @@ top:
 			pte->pg_m = 1;
 		distcl(pte);
 		if (c->c_type == CTEXT)
-			distpte(xp, (unsigned)vtotp(rp, v), pte);
+			distpte(xp, vtotp(rp, v), pte);
+#else	romp
+		if (referenced(pte)) {
+			set_ref_bit(pte->pg_pfnum, 0);
+#endif	romp
 		if ((rp->p_flag & (SSEQL|SUANOM)) == 0 &&
 		    rp->p_rssize <= rp->p_maxrss)
 			return (0);
@@ -832,6 +933,14 @@ top:
 			return (0);
 	}
 
+#ifdef	romp
+			pte->pg_v = 0;
+			if (anycl(pte, pg_m))
+				pte->pg_m = 1;
+			distcl(pte);
+			if (c->c_type == CTEXT)
+				distpte(xp, vtotp(rp, v), pte);
+#endif	romp
 	/*
 	 * If the page is currently dirty, we
 	 * have to arrange to have it cleaned before it
@@ -880,7 +989,7 @@ top:
 		 * daemon moving.
 		 */
 loop2:
-		(void) splbio();
+		(void) spl6();
 		if (bclnlist != NULL) {
 			(void) spl0();
 			cleanup();
@@ -910,14 +1019,14 @@ loop2:
 		distcl(pte);
 		if (c->c_type == CTEXT)  {
 			xp->x_poip++;
-			distpte(xp, (unsigned)vtotp(rp, v), pte);
+			distpte(xp, vtotp(rp, v), pte);
 		} else
 			rp->p_poip++;
 		v = kluster(rp, v, pte, B_WRITE, &klsize, klout, (daddr_t)0);
 		if (klsize == 0)
 			panic("pageout klsize");
 		daddr = vtod(rp, v, &pushutl.u_dmap, &pushutl.u_smap);
-		(void)swap(rp, daddr, ptob(v), klsize * ctob(CLSIZE),
+		swap(rp, daddr, ptob(v), klsize * ctob(CLSIZE),
 		    B_WRITE, B_DIRTY, swapdev, pte->pg_pfnum);
 		/*
 		 * The cleaning of this page will be
@@ -972,7 +1081,7 @@ cleanup()
 	int s, center;
 
 	for (;;) {
-		s = splbio();
+		s = spl6();
 		if ((bp = bclnlist) == 0)
 			break;
 		bclnlist = bp->av_forw;
@@ -1089,6 +1198,13 @@ kluster(p, v, pte0, rw, pkl, klsize, bn0)
 	else
 		klocnt[0]++;
 	*pkl = 1;
+#ifdef	romp
+/***************************************************************************/
+return(v);	/* NOOP THIS PROC UNTIL WE DECIDE THAT KLUSTERING IS WORTH
+		/* WHILE ON A MACHINE THAT MUST DO DISL	I/O TO PHYSICAL MEMORY
+		/* ADDRESSES.
+/***************************************************************************/
+#else	romp
 	if (noklust || klsize <= 1 || klsize > KLMAX || (klsize & (klsize - 1)))
 		return (v);
 	if (rw == B_READ && freemem < CLSIZE * KLMAX)
@@ -1168,7 +1284,7 @@ kluster(p, v, pte0, rw, pkl, klsize, bn0)
 			pte->pg_m = 0;
 			distcl(pte);
 			if (type == CTEXT)
-				distpte(p->p_textp, (unsigned)vtotp(p, v), pte);
+				distpte(p->p_textp, vtotp(p, v), pte);
 		} else {
 			struct pte opte;
 
@@ -1180,7 +1296,7 @@ kluster(p, v, pte0, rw, pkl, klsize, bn0)
 			distcl(pte);
 			if (type == CTEXT) {
 				p->p_textp->x_rssize += CLSIZE;
-				distpte(p->p_textp, (unsigned)vtotp(p, v), pte);
+				distpte(p->p_textp, vtotp(p, v), pte);
 			} else
 				p->p_rssize += CLSIZE;
 			distcl(pte);
@@ -1190,6 +1306,7 @@ cont:
 		v += CLSIZE;
 	}
 	return (v0);
+#endif	romp
 }
 
 klok(pte, rw)
@@ -1239,10 +1356,10 @@ fodkluster(p, v0, pte0, pkl, dev, pbn)
 	register struct fpte *fpte;
 	struct cmap *c;
 	register daddr_t bn;
-	daddr_t bnswap;
-	unsigned v, vmin, vmax;
+	daddr_t bnswap, v;
 	register int klsize;
 	int klback, type, i;
+	long vmin, vmax;
 
 	if (nofodklust)
 		return (v0);
@@ -1253,11 +1370,11 @@ fodkluster(p, v0, pte0, pkl, dev, pbn)
 	if (isatsv(p, v0)) {
 		type = CTEXT;
 		vmin = tptov(p, 0);
-		vmax = tptov(p, clrnd(p->p_tsize) - CLSIZE);
+		vmax = tptov(p, clrnd(btoc(p->p_tsize)) - CLSIZE);
 	} else {
 		type = CDATA;
 		vmin = dptov(p, 0);
-		vmax = dptov(p, clrnd(p->p_dsize) - CLSIZE);
+		vmax = dptov(p, clrnd(btoc(p->p_dsize)) - CLSIZE);
 	}
 	fpte = (struct fpte *)pte0;
 	bn = *pbn;
@@ -1336,7 +1453,7 @@ fodkluster(p, v0, pte0, pkl, dev, pbn)
 			distcl(pte);
 			if (type == CTEXT) {
 				p->p_textp->x_rssize += CLSIZE;
-				distpte(p->p_textp, (unsigned)vtotp(p, v), pte);
+				distpte(p->p_textp, vtotp(p, v), pte);
 			} else
 				p->p_rssize += CLSIZE;
 			distcl(pte);
@@ -1346,3 +1463,4 @@ fodkluster(p, v0, pte0, pkl, dev, pbn)
 	}
 	return (v0);
 }
+#endif	MACH_VM

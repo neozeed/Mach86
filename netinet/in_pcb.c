@@ -1,10 +1,56 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)in_pcb.c	7.1 (Berkeley) 6/5/86
+ *	@(#)in_pcb.c	6.9 (Berkeley) 9/16/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 11-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_INET:  changed to use the SS_PRIV bit in the socket rather
+ *	than u_uid to verify use of reserved port numbers.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_generic.h"
+#include "cs_inet.h"
+#include "cs_lint.h"
+#endif	CMU
 
 #include "param.h"
 #include "systm.h"
@@ -13,7 +59,6 @@
 #include "mbuf.h"
 #include "socket.h"
 #include "socketvar.h"
-#include "ioctl.h"
 #include "in.h"
 #include "in_systm.h"
 #include "../net/if.h"
@@ -22,6 +67,10 @@
 #include "in_var.h"
 #include "protosw.h"
 
+#if	CS_GENERIC
+struct mbuf *hosts = 0;		/* for netstat */
+
+#endif	CS_GENERIC
 struct	in_addr zeroin_addr;
 
 in_pcballoc(so, head)
@@ -74,7 +123,11 @@ in_pcbbind(inp, nam)
 		int wild = 0;
 
 		/* GROSS */
+#if	CS_INET
+		if (aport < IPPORT_RESERVED && u.u_uid != 0 && (so->so_state&SS_PRIV) == 0)
+#else	CS_INET
 		if (aport < IPPORT_RESERVED && u.u_uid != 0)
+#endif	CS_INET
 			return (EACCES);
 		/* even GROSSER, but this is the Internet */
 		if ((so->so_options & SO_REUSEADDR) == 0 &&
@@ -89,8 +142,7 @@ in_pcbbind(inp, nam)
 noname:
 	if (lport == 0)
 		do {
-			if (head->inp_lport++ < IPPORT_RESERVED ||
-			    head->inp_lport > IPPORT_USERRESERVED)
+			if (head->inp_lport++ < IPPORT_RESERVED)
 				head->inp_lport = IPPORT_RESERVED;
 			lport = htons(head->inp_lport);
 		} while (in_pcblookup(head,
@@ -135,46 +187,40 @@ in_pcbconnect(inp, nam)
 		    sin->sin_addr = satosin(&in_ifaddr->ia_broadaddr)->sin_addr;
 	}
 	if (inp->inp_laddr.s_addr == INADDR_ANY) {
-		register struct route *ro;
-		struct ifnet *ifp;
+		ia = (struct in_ifaddr *)ifa_ifwithnet((struct sockaddr *)sin);
+		if (ia == (struct in_ifaddr *)0) {
+			register struct route *ro;
+			struct ifnet *ifp;
 
-		ia = (struct in_ifaddr *)0;
-		/* 
-		 * If route is known or can be allocated now,
-		 * our src addr is taken from the i/f, else punt.
-		 */
-		ro = &inp->inp_route;
-		if (ro->ro_rt &&
-		    satosin(&ro->ro_dst)->sin_addr.s_addr !=
-		    sin->sin_addr.s_addr) {
-			RTFREE(ro->ro_rt);
-			ro->ro_rt = (struct rtentry *)0;
-		}
-		if ((inp->inp_socket->so_options & SO_DONTROUTE) == 0 && /*XXX*/
-		    (ro->ro_rt == (struct rtentry *)0 ||
-		    (ifp = ro->ro_rt->rt_ifp) == (struct ifnet *)0)) {
-			/* No route yet, so try to acquire one */
-			ro->ro_dst.sa_family = AF_INET;
-			((struct sockaddr_in *) &ro->ro_dst)->sin_addr =
-				sin->sin_addr;
-			rtalloc(ro);
-			/*
-			 * If we found a route, use the address
-			 * corresponding to the outgoing interface
-			 * unless it is the loopback (in case a route
-			 * to our address on another net goes to loopback).
+			/* 
+			 * If route is known or can be allocated now,
+			 * our src addr is taken from the i/f, else punt.
 			 */
-			if (ro->ro_rt && (ifp = ro->ro_rt->rt_ifp) &&
-			    (ifp->if_flags & IFF_LOOPBACK) == 0)
+			ro = &inp->inp_route;
+			if (ro->ro_rt &&
+			    satosin(&ro->ro_dst)->sin_addr.s_addr !=
+			    sin->sin_addr.s_addr) {
+				RTFREE(ro->ro_rt);
+				ro->ro_rt = (struct rtentry *)0;
+			}
+			if ((ro->ro_rt == (struct rtentry *)0) ||
+			    (ifp = ro->ro_rt->rt_ifp) == (struct ifnet *)0) {
+				/* No route yet, so try to acquire one */
+				ro->ro_dst.sa_family = AF_INET;
+				((struct sockaddr_in *) &ro->ro_dst)->sin_addr =
+					sin->sin_addr;
+				rtalloc(ro);
+				if (ro->ro_rt == 0)
+					ifp = (struct ifnet *)0;
+				else
+					ifp = ro->ro_rt->rt_ifp;
+			}
+			if (ifp) {
 				for (ia = in_ifaddr; ia; ia = ia->ia_next)
 					if (ia->ia_ifp == ifp)
 						break;
-		}
-		if (ia == 0) {
-			ia = (struct in_ifaddr *)
-			    ifa_ifwithdstaddr((struct sockaddr *)sin);
-			if (ia == 0)
-				ia = in_iaonnetof(in_netof(sin->sin_addr));
+			} else
+				ia = (struct in_ifaddr *)0;
 			if (ia == 0)
 				ia = in_ifaddr;
 			if (ia == 0)
@@ -191,7 +237,16 @@ in_pcbconnect(inp, nam)
 		return (EADDRINUSE);
 	if (inp->inp_laddr.s_addr == INADDR_ANY) {
 		if (inp->inp_lport == 0)
-			(void)in_pcbbind(inp, (struct mbuf *)0);
+#if	CS_LINT
+		{
+			int error;
+
+			if (error=in_pcbbind(inp, (struct mbuf *)0))
+				return(error);
+		}
+#else	CS_LINT
+			in_pcbbind(inp, (struct mbuf *)0);
+#endif	CS_LINT
 		inp->inp_laddr = ifaddr->sin_addr;
 	}
 	inp->inp_faddr = sin->sin_addr;
@@ -217,7 +272,7 @@ in_pcbdetach(inp)
 	so->so_pcb = 0;
 	sofree(so);
 	if (inp->inp_options)
-		(void)m_free(inp->inp_options);
+		m_free(inp->inp_options);
 	if (inp->inp_route.ro_rt)
 		rtfree(inp->inp_route.ro_rt);
 	remque(inp);
@@ -282,34 +337,11 @@ in_pcbnotify(head, dst, errno, notify)
 }
 
 /*
- * Check for alternatives when higher level complains
- * about service problems.  For now, invalidate cached
- * routing information.  If the route was created dynamically
- * (by a redirect), time to try a default gateway again.
- */
-in_losing(inp)
-	struct inpcb *inp;
-{
-	register struct rtentry *rt;
-
-	if ((rt = inp->inp_route.ro_rt)) {
-		if (rt->rt_flags & RTF_DYNAMIC)
-			(void) rtrequest((int)SIOCDELRT, rt);
-		rtfree(rt);
-		inp->inp_route.ro_rt = 0;
-		/*
-		 * A new route can be allocated
-		 * the next time output is attempted.
-		 */
-	}
-}
-
-/*
  * After a routing change, flush old routing
  * and allocate a (hopefully) better one.
  */
 in_rtchange(inp)
-	register struct inpcb *inp;
+	struct inpcb *inp;
 {
 	if (inp->inp_route.ro_rt) {
 		rtfree(inp->inp_route.ro_rt);

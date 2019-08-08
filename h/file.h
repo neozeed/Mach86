@@ -1,11 +1,83 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)file.h	7.1 (Berkeley) 6/4/86
+ *	@(#)file.h	6.3 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 26-Mar-86  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_BUGFIX: Fixed KERNEL_FILE symbol to include all
+ *	definitions.
+ *
+ * 29-Jan-86  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT:  Added FDIROK definition.
+ *
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 25-Nov-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_BUGFIX: Added new KERNEL_FILE symbol to enable struct
+ *	file definitions when desired outside the kernel.
+ *
+ * 20-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_RFS:  Added DTYPE_RFSINO definition.
+ *	[V1(1)]
+ *
+ * 13-May-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	Upgraded from 4.1BSD.  Carried over change below.
+ *	CS_COMPAT: retained pipe definitions for now;
+ *	CS_XMOD:  retained exclusive use definitions for now.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#ifdef	KERNEL
+#include "cs_compat.h"
+#include "cs_bugfix.h"
+#include "cs_rfs.h"
+#include "cs_xmod.h"
+#else	KERNEL
+#include <sys/features.h>
+#endif	KERNEL
+#endif	CMU
 
+#if	CS_BUGFIX
+#ifdef	KERNEL_FILE
+#define	KERNEL
+#endif	KERNEL_FILE
+#endif	CS_BUGFIX
 #ifdef KERNEL
 /*
  * Descriptor table entry.
@@ -23,7 +95,15 @@ struct	file {
 		int	(*fo_close)();
 	} *f_ops;
 	caddr_t	f_data;		/* inode */
+#if	CS_COMPAT
+	union {
+		off_t	fu_offset;	/* read/write character pointer */
+		struct chan *f_chan;	/* mpx channel pointer */
+	} f_un;
+#define	f_offset	f_un.fu_offset
+#else	CS_COMPAT
 	off_t	f_offset;
+#endif	CS_COMPAT
 };
 
 struct	file *file, *fileNFILE;
@@ -58,6 +138,16 @@ struct	file *falloc();
 #define	FCREAT		01000		/* create if nonexistant */
 #define	FTRUNC		02000		/* truncate to zero length */
 #define	FEXCL		04000		/* error if already created */
+#if	CS_COMPAT
+#define	FDIROK		010000
+#define	FPIPE		020000
+#define	FMPX		040000
+#define	FMPY		0100000
+#define	FMP		0140000
+#endif	CS_COMPAT
+#if	CS_XMOD
+#define	FXMODE		0200000		/* exclusive use mode set */
+#endif	CS_XMOD
 
 #ifndef	F_DUPFD
 /* fcntl(2) requests--from <fcntl.h> */
@@ -118,4 +208,13 @@ struct	file *falloc();
 }
 #define	DTYPE_INODE	1	/* file */
 #define	DTYPE_SOCKET	2	/* communications endpoint */
+#if	CS_RFS
+#define	DTYPE_RFSINO	3	/* remote file system inode */
+#define	DTYPE_RFSCTL	4	/* remote file system control */
+#endif	CS_RFS
 #endif
+#if	CS_BUGFIX
+#ifdef	KERNEL_FILE
+#undef	KERNEL
+#endif	KERNEL_FILE
+#endif	CS_BUGFIX

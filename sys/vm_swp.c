@@ -1,10 +1,58 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)vm_swp.c	7.1 (Berkeley) 6/5/86
+ *	@(#)vm_swp.c	6.7 (Berkeley) 8/28/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 18-Dec-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	Upgraded from 4.1BSD.  Carried over change below:
+ *
+ * 17-Jul-84  Fil Alleva (faa) at Carnegie-Mellon University
+ *	NDS:  Added code in physio() to preserve SPHYSIO bit in
+ *	users process flags so that the DSC device will work correctly
+ *	with other devices.
+ *
+ **********************************************************************
+ */
+ 
+#include "ds.h"
+#include "mach_vm.h"
+#endif	CMU
 
 #include "../machine/pte.h"
 
@@ -20,6 +68,9 @@
 #include "trace.h"
 #include "map.h"
 #include "uio.h"
+
+#if	MACH_VM
+#else	MACH_VM
 
 /*
  * Swap IO headers -
@@ -59,9 +110,8 @@ swap(p, dblkno, addr, nbytes, rdflg, flag, dev, pfcent)
 	register struct pte *dpte, *vpte;
 	int s;
 	extern swdone();
-	int error = 0;
 
-	s = splbio();
+	s = spl6();
 	while (bswlist.av_forw == NULL) {
 		bswlist.b_flags |= B_WANTED;
 		sleep((caddr_t)&bswlist, PSWP+1);
@@ -105,7 +155,7 @@ swap(p, dblkno, addr, nbytes, rdflg, flag, dev, pfcent)
 		if (flag & B_DIRTY) {
 			if (c < nbytes)
 				panic("big push");
-			return (error);
+			return;
 		}
 		bp->b_un.b_addr += c;
 		bp->b_flags &= ~B_DONE;
@@ -113,12 +163,11 @@ swap(p, dblkno, addr, nbytes, rdflg, flag, dev, pfcent)
 			if ((flag & (B_UAREA|B_PAGET)) || rdflg == B_WRITE)
 				panic("hard IO err in swap");
 			swkill(p, "swap: read error from swap device");
-			error = EIO;
 		}
 		nbytes -= c;
 		dblkno += btodb(c);
 	}
-	s = splbio();
+	s = spl6();
 	bp->b_flags &= ~(B_BUSY|B_WANTED|B_PHYS|B_PAGET|B_UAREA|B_DIRTY);
 	bp->av_forw = bswlist.av_forw;
 	bswlist.av_forw = bp;
@@ -128,7 +177,6 @@ swap(p, dblkno, addr, nbytes, rdflg, flag, dev, pfcent)
 		wakeup((caddr_t)&proc[2]);
 	}
 	splx(s);
-	return (error);
 }
 
 /*
@@ -142,7 +190,7 @@ swdone(bp)
 
 	if (bp->b_flags & B_ERROR)
 		panic("IO err in push");
-	s = splbio();
+	s = spl6();
 	bp->av_forw = bclnlist;
 	cnt.v_pgout++;
 	cnt.v_pgpgout += bp->b_bcount / NBPG;
@@ -174,6 +222,7 @@ swkill(p, rout)
 	p->p_flag |= SULOCK;
 }
 
+#endif	MACH_VM
 /*
  * Raw I/O. The arguments are
  *	The strategy routine for the device
@@ -207,7 +256,7 @@ nextiov:
 	iov = uio->uio_iov;
 	if (useracc(iov->iov_base,(u_int)iov->iov_len,rw==B_READ?B_WRITE:B_READ) == NULL)
 		return (EFAULT);
-	s = splbio();
+	s = spl6();
 	while (bp->b_flags&B_BUSY) {
 		bp->b_flags |= B_WANTED;
 		sleep((caddr_t)bp, PRIBIO+1);
@@ -217,6 +266,10 @@ nextiov:
 	bp->b_proc = u.u_procp;
 	bp->b_un.b_addr = iov->iov_base;
 	while (iov->iov_len > 0) {
+#if	NDS > 0
+		int sphysio = (u.u_procp->p_flag&SPHYSIO);
+
+#endif	NDS > 0
 		bp->b_flags = B_BUSY | B_PHYS | rw;
 		bp->b_dev = dev;
 		bp->b_blkno = btodb(uio->uio_offset);
@@ -226,9 +279,13 @@ nextiov:
 		u.u_procp->p_flag |= SPHYSIO;
 		vslock(a = bp->b_un.b_addr, c);
 		physstrat(bp, strat, PRIBIO);
-		(void) splbio();
+		(void) spl6();
 		vsunlock(a, c, rw);
+#if	NDS > 0
+		u.u_procp->p_flag &= (~SPHYSIO | sphysio);
+#else	NDS > 0
 		u.u_procp->p_flag &= ~SPHYSIO;
+#endif	NDS > 0
 		if (bp->b_flags&B_WANTED)
 			wakeup((caddr_t)bp);
 		splx(s);

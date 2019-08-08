@@ -1,13 +1,85 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)if_en.c	7.1 (Berkeley) 6/5/86
+ *	@(#)if_en.c	6.9 (Berkeley) 9/16/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 09-Aug-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	NENET: Integrated filter changes from Jeff Mogul at Stanford.
+ *	[V1(1)]
+ *
+ * 14 December 1984	Jeff Mogul	Stanford
+ *	- Use if_mqenqueue instead of IF_ENQUEUE for IPs
+ *
+ * 20 July 1984	Jeff Mogul	Stanford
+ *	- prohibit sending of AF_INET packets as broadcasts unless
+ *	they really are broadcasts.
+ *
+ * 19 July 1984	Jeff Mogul	Stanford
+ *	- Added watchdog timer because some boards lose transmitter
+ *	interrupts.
+ *
+ * 13 February 1984	Jeff Mogul	Stanford
+ *	- Added swabbing of all packets #ifdef	SWABALL
+ *	- Use of trailer packets #ifdef	USE_TRAILERS instead of
+ *		#ifdef	SWABIPS; should probably just use IFF_NOTRAILERS
+ *		flag.
+ *
+ * 10 November 1983	Jeffrey Mogul
+ *	- minor change to linkage mechanism so that filter can
+ *	support a variety of hardware
+ *
+ * 25 April 1983	Mogul, Croft, Nowicki
+ *	- linkage to CMU enet filter, #if NENET > 0
+ *	- IP packets are swabbed on send/receive 
+ *	- don't interfere with subnet part of IP address
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_generic.h"
+#include "cs_inet.h"
+#include "cs_lint.h"
+ 
+#include "enet.h"
+#endif	CMU
 
 #include "en.h"
-#if NEN > 0
 
 /*
  * Xerox prototype (3 Mb) Ethernet interface driver.
@@ -23,26 +95,30 @@
 #include "vmmac.h"
 #include "errno.h"
 #include "ioctl.h"
+#if	NENET > 0
+#include "../h/enet.h"
+#endif	NENET > 0
 
 #include "../net/if.h"
 #include "../net/netisr.h"
 #include "../net/route.h"
 
+#ifdef	BBNNET
+#define	INET
+#endif
 #ifdef	INET
 #include "../netinet/in.h"
 #include "../netinet/in_systm.h"
 #include "../netinet/in_var.h"
 #include "../netinet/ip.h"
+#if	CS_INET
+#include "../netinet/if_ether.h"
+#endif	CS_INET
 #endif
 
 #ifdef PUP
 #include "../netpup/pup.h"
 #include "../netpup/ether.h"
-#endif
-
-#ifdef NS
-#include "../netns/ns.h"
-#include "../netns/ns_if.h"
 #endif
 
 #include "../vax/cpu.h"
@@ -58,12 +134,19 @@
 
 int	enprobe(), enattach(), enrint(), enxint(), encollide();
 struct	uba_device *eninfo[NEN];
+#if	CS_GENERIC
+u_short enstd[] = { 0164000, 0160020, 0 };
+#else	CS_GENERIC
 u_short enstd[] = { 0 };
+#endif	CS_GENERIC
 struct	uba_driver endriver =
 	{ enprobe, 0, enattach, 0, enstd, "en", eninfo };
 #define	ENUNIT(x)	minor(x)
 
 int	eninit(),enoutput(),enreset(),enioctl();
+#if	NENET > 0
+int	enwatchdog();
+#endif	NENET > 0
 
 #ifdef notdef
 /*
@@ -86,7 +169,13 @@ int	eninit(),enoutput(),enreset(),enioctl();
  * efficiently.
  */
 struct	en_softc {
+#if	CS_INET
+	struct	arpcom es_ac;		/* Ethernet common part */
+#define	es_if	es_ac.ac_if		/* network-visible interface */
+#define	es_addr	es_ac.ac_enaddr		/* hardware Ethernet address */
+#else	CS_INET
 	struct	ifnet es_if;		/* network-visible interface */
+#endif	CS_INET
 	struct	ifuba es_ifuba;		/* UNIBUS resources */
 	short	es_host;		/* hardware host number */
 	short	es_delay;		/* current output delay */
@@ -94,7 +183,9 @@ struct	en_softc {
 	short	es_lastx;		/* host last transmitted to */
 	short	es_oactive;		/* is output active? */
 	short	es_olen;		/* length of last output */
-	short	es_nsactive;		/* is interface enabled for ns? */
+#if	NENET > 0
+	short	es_enetunit;		/* unit number for enet filtering */
+#endif	NENET > 0
 } en_softc[NEN];
 
 /*
@@ -117,6 +208,14 @@ enprobe(reg)
 	addr->en_ostat = EN_IEN|EN_GO;
 	DELAY(100000);
 	addr->en_ostat = 0;
+#if	CS_GENERIC
+	/*
+	 *  Allow for a collision rather than transmit done interrupt by
+	 *  masking out the low order bits.
+	 */
+	if (cvec != 0x200)
+		cvec &= ~0xf;
+#endif	CS_GENERIC	
 	return (1);
 }
 
@@ -138,12 +237,40 @@ enattach(ui)
 	es->es_if.if_output = enoutput;
 	es->es_if.if_ioctl = enioctl;
 	es->es_if.if_reset = enreset;
+#if	NENET > 0
+	es->es_if.if_watchdog = enwatchdog;
+	es->es_if.if_timer = 0;
+#endif	NENET > 0
 	es->es_ifuba.ifu_flags = UBA_NEEDBDP | UBA_NEED16 | UBA_CANTWAIT;
 #if defined(VAX750)
 	/* don't chew up 750 bdp's */
 	if (cpu == VAX_750 && ui->ui_unit > 0)
 		es->es_ifuba.ifu_flags &= ~UBA_NEEDBDP;
 #endif
+#if NENET > 0
+	{
+	    struct endevp enp;
+	    struct en_header dummy;
+	    struct endevice *enaddr = (struct endevice *)(ui->ui_addr);
+	    
+#ifdef	SWABALL
+	    enp.end_dev_type = ENDT_3MB;
+#else	SWABALL
+	    enp.end_dev_type = ENDT_BS3MB;   /* packets appear byte-swapped */
+#endif	SWABALL
+ 
+	    enp.end_addr_len = sizeof(dummy.en_shost);
+	    enp.end_hdr_len = sizeof(struct en_header);
+	    enp.end_MTU = ENMTU;
+	    enp.end_addr[0] = (~enaddr->en_addr) & 0xFF;
+	    enp.end_broadaddr[0] = 0;
+ 
+	    es->es_enetunit = enetattach(&es->es_if, &enp);
+	}
+#endif NENET > 0
+#if	CS_INET
+	es->es_addr[0] = (~((struct endevice *)(ui->ui_addr))->en_addr);
+#endif	CS_INET
 	if_attach(&es->es_if);
 }
 
@@ -208,6 +335,9 @@ int	enlastmask = (~0) << 5;
  * Start or restart output on interface.
  * If interface is already active, then this is a retransmit
  * after a collision, and just restuff registers and delay.
+#if	NENET > 0
+ * (It might also be a restart after a watchdog timeout.)
+#endif	NENET > 0
  * If interface is not already active, get another datagram
  * to send off of the interface queue, and map it to the interface
  * before starting the output.
@@ -284,6 +414,15 @@ restart:
 	addr->en_owc = -((es->es_olen + 1) >> 1);
 	addr->en_ostat = EN_IEN|EN_GO;
 	es->es_oactive = 1;
+#if	NENET > 0
+	es->es_if.if_timer = 1 + IFNET_SLOWHZ;
+	/* 		     ^
+	 * The "1" is to guarantee at least one complete timeout
+	 * interval, since IFNET_SLOWHZ may be one.  If if_timer
+	 * is started at one, the watchdog might go off in much
+	 * less than 1/IFNET_SLOWHZ seconds.
+	 */
+#endif	NENET > 0
 }
 
 /*
@@ -305,6 +444,9 @@ enxint(unit)
 		return;
 	}
 	es->es_if.if_opackets++;
+#if	NENET > 0
+	es->es_if.if_timer = 0;	/* don't want the timer going off */
+#endif	NENET > 0
 	es->es_oactive = 0;
 	es->es_delay = 0;
 	es->es_mask = ~0;
@@ -359,6 +501,26 @@ endocoll(unit)
 	enstart(unit);
 }
 
+#if	NENET > 0
+/*
+ * Watchdog routine
+ *
+ * The timer should only be running while the interface
+ * is active for output; it is always reset when enstart()
+ * restarts the interface, and is set to be much longer than
+ * the maximum time it should take to send a packet.  So, if
+ * the timer does go off, we assume that the transmitter interrupt
+ * was lost, and restart the transmission by pretending a collision
+ * interrupt was seen.  This may lead to duplicated packets!
+ */
+enwatchdog(unit)
+	int unit;
+{
+	printf("en%d: watchdog\n", unit);
+	encollide(unit);
+}
+
+#endif	NENET > 0
 #ifdef notdef
 struct	sockproto enproto = { AF_ETHERLINK };
 struct	sockaddr_en endst = { AF_ETHERLINK };
@@ -382,7 +544,11 @@ enrint(unit)
     	struct mbuf *m;
 	int len; short resid;
 	register struct ifqueue *inq;
+#if	NENET > 0
+	int off = 0, s;
+#else	NENET > 0
 	int off, s;
+#endif	NENET > 0
 
 	es->es_if.if_ipackets++;
 
@@ -408,17 +574,28 @@ enrint(unit)
 		resid |= 0176000;
 	len = (((sizeof (struct en_header) + ENMRU) >> 1) + resid) << 1;
 	len -= sizeof (struct en_header);
+#if	NENET > 0
+	if ((len > ENMRU) || (len <= 0))
+#else	NENET > 0
 	if (len > ENMRU)
+#endif	NENET > 0
 		goto setup;			/* sanity */
 	en = (struct en_header *)(es->es_ifuba.ifu_r.ifrw_addr);
+#if	CS_INET
+#else	CS_INET
 	en->en_type = ntohs(en->en_type);
+#endif	CS_INET
 #define	endataaddr(en, off, type)	((type)(((caddr_t)((en)+1)+(off))))
 	if (en->en_type >= ENTYPE_TRAIL &&
 	    en->en_type < ENTYPE_TRAIL+ENTYPE_NTRAILER) {
 		off = (en->en_type - ENTYPE_TRAIL) * 512;
 		if (off > ENMTU)
 			goto setup;		/* sanity */
+#if	CS_INET
+		en->en_type = (*endataaddr(en, off, u_short *));
+#else	CS_INET
 		en->en_type = ntohs(*endataaddr(en, off, u_short *));
+#endif	CS_INET
 		resid = ntohs(*(endataaddr(en, off+2, u_short *)));
 		if (off + resid > len)
 			goto setup;		/* sanity */
@@ -447,6 +624,7 @@ enrint(unit)
 		m->m_off += 2 * sizeof (u_short);
 		m->m_len -= 2 * sizeof (u_short);
 		*(mtod(m, struct ifnet **)) = ifp;
+
 	}
 	switch (en->en_type) {
 
@@ -455,24 +633,47 @@ enrint(unit)
 		schednetisr(NETISR_IP);
 		inq = &ipintrq;
 		break;
+#if	CS_INET
+
+	case ENTYPE_ARP:
+		arpinput(&es->es_ac, m);
+		goto setup;
+#endif	CS_INET
 #endif
+#if NENET > 0
+	default:
+	{
+		register struct mbuf *mtop;
+		/*
+		 * We need the local net header after all.  Oh well,
+		 * this could be improved.
+		 */
+		MGET(mtop, M_DONTWAIT, MT_DATA);
+		if (mtop == 0) {	/* no more mbufs? */
+			m_freem(m);		/* wasted effort */
+			goto setup;
+		}
+#ifdef	SWABALL
+		/*
+		 * the interface has put en_type in host order and we
+		 * want it in net order.
+		 */
+		en->en_type = htons(en->en_type);
+#endif	SWABALL
+		bcopy((caddr_t)en, (caddr_t)mtod(mtop, struct en_header *),
+						sizeof(struct en_header));
+		mtop->m_len = sizeof(struct en_header);
+		mtop->m_next = m;
+		enetFilter(es->es_enetunit, mtop,
+				(len + sizeof(struct en_header)) );
+		goto setup;
+	}
+#else	NENET > 0
 #ifdef PUP
 	case ENTYPE_PUP:
 		rpup_input(m);
 		goto setup;
 #endif
-#ifdef NS
-	case ETHERTYPE_NS:
-		if (es->es_nsactive) {
-			schednetisr(NETISR_NS);
-			inq = &nsintrq;
-		} else {
-			m_freem(m);
-			goto setup;
-		}
-		break;
-#endif
-
 	default:
 #ifdef notdef
 		enproto.sp_protocol = en->en_type;
@@ -485,6 +686,7 @@ enrint(unit)
 		m_freem(m);
 #endif
 		goto setup;
+#endif NENET > 0
 	}
 
 	s = splimp();
@@ -518,12 +720,11 @@ enoutput(ifp, m0, dst)
 	int type, dest, s, error;
 	register struct mbuf *m = m0;
 	register struct en_header *en;
+#if	CS_INET
+	register struct en_softc *es = &en_softc[ifp->if_unit];
+#endif	CS_INET
 	register int off;
 
-	if ((ifp->if_flags & (IFF_UP|IFF_RUNNING)) != (IFF_UP|IFF_RUNNING)) {
-		error = ENETDOWN;
-		goto bad;
-	}
 	switch (dst->sa_family) {
 
 #ifdef INET
@@ -557,22 +758,6 @@ enoutput(ifp, m0, dst)
 		off = 0;
 		goto gottype;
 #endif
-#ifdef NS
-	case AF_NS:
-	{
-		u_char *up;
-
-		type = ETHERTYPE_NS;
-		up = ((struct sockaddr_ns *)dst)->sns_addr.x_host.c_host;
-		if (*up & 1)
-			dest = EN_BROADCAST;
-		else
-			dest = up[5];
-
-		off = 0;
-		goto gottype;
-	}
-#endif
 #ifdef PUP
 	case AF_PUP:
 		dest = ((struct sockaddr_pup *)dst)->spup_host;
@@ -580,6 +765,13 @@ enoutput(ifp, m0, dst)
 		off = 0;
 		goto gottype;
 #endif
+#if	CS_INET
+	case AF_UNSPEC:
+		dest = dst->sa_data[0];
+		type = ((struct en_header *)dst->sa_data)->en_type;
+		off = 0;
+		goto gottype;
+#endif	CS_INET
 
 #ifdef notdef
 	case AF_ETHERLINK:
@@ -625,9 +817,15 @@ gottype:
 		m->m_len += sizeof (struct en_header);
 	}
 	en = mtod(m, struct en_header *);
+#if	CS_INET
+	en->en_shost = es->es_addr[0];
+	en->en_dhost = dest;
+	en->en_type = (u_short)type;
+#else	CS_INET
 	/* add en_shost later */
 	en->en_dhost = dest;
 	en->en_type = htons((u_short)type);
+#endif	CS_INET
 
 #ifdef notdef
 gotheader:
@@ -682,14 +880,6 @@ enioctl(ifp, cmd, data)
 			if (in_lnaof(IA_SIN(ifa)->sin_addr) != es->es_host)
 				return (EADDRNOTAVAIL);
 			break;
-#ifdef NS
-		case AF_NS:
-			if (IA_SNS(ifa)->sns_addr.x_host.c_host[5]
-							!= es->es_host)
-				return (EADDRNOTAVAIL);
-			es->es_nsactive = 1;
-			break;
-#endif
 		}
 		ifp->if_flags |= IFF_UP;
 		if ((ifp->if_flags & IFF_RUNNING) == 0)
@@ -731,5 +921,4 @@ enswab(from, to, n)
 		STEP; STEP; STEP; STEP;
 	}
 }
-#endif
 #endif

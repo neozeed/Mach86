@@ -1,10 +1,57 @@
 /*
- * Copyright (c) 1982,1985, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)socket.h	7.1 (Berkeley) 6/4/86
+ *	@(#)socket.h	6.8 (Berkeley) 9/16/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 16-Oct-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_SOCKET:  added SO_CANTSIG definition.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#ifdef	KERNEL
+#include "cs_socket.h"
+#else	KERNEL
+#include <sys/features.h>
+#endif	KERNEL
+#endif	CMU
 
 /*
  * Definitions related to sockets: types, address families, options.
@@ -22,15 +69,17 @@
 /*
  * Option flags per-socket.
  */
-#define	SO_DEBUG	0x0001		/* turn on debugging info recording */
-#define	SO_ACCEPTCONN	0x0002		/* socket has had listen() */
-#define	SO_REUSEADDR	0x0004		/* allow local address reuse */
-#define	SO_KEEPALIVE	0x0008		/* keep connections alive */
-#define	SO_DONTROUTE	0x0010		/* just use interface addresses */
-#define	SO_BROADCAST	0x0020		/* permit sending of broadcast msgs */
-#define	SO_USELOOPBACK	0x0040		/* bypass hardware when possible */
-#define	SO_LINGER	0x0080		/* linger on close if data present */
-#define	SO_OOBINLINE	0x0100		/* leave received OOB data in line */
+#define	SO_DEBUG	0x01		/* turn on debugging info recording */
+#define	SO_ACCEPTCONN	0x02		/* socket has had listen() */
+#define	SO_REUSEADDR	0x04		/* allow local address reuse */
+#define	SO_KEEPALIVE	0x08		/* keep connections alive */
+#define	SO_DONTROUTE	0x10		/* just use interface addresses */
+#define	SO_BROADCAST	0x20		/* permit sending of broadcast msgs */
+#define	SO_USELOOPBACK	0x40		/* bypass hardware when possible */
+#define	SO_LINGER	0x80		/* linger on close if data present */
+#if	CS_SOCKET
+#define	SO_CANTSIG	0x8000		/* prevent SIGPIPE on SS_CANTSENDMORE */
+#endif	CS_SOCKET
 
 /*
  * Additional options, not kept in so_options.
@@ -42,7 +91,6 @@
 #define SO_SNDTIMEO	0x1005		/* send timeout */
 #define SO_RCVTIMEO	0x1006		/* receive timeout */
 #define	SO_ERROR	0x1007		/* get error status and clear */
-#define	SO_TYPE		0x1008		/* get socket type */
 
 /*
  * Structure used for manipulating linger option.
@@ -76,9 +124,8 @@ struct	linger {
 #define AF_DLI		13		/* Direct data link interface */
 #define AF_LAT		14		/* LAT */
 #define	AF_HYLINK	15		/* NSC Hyperchannel */
-#define	AF_APPLETALK	16		/* Apple Talk */
 
-#define	AF_MAX		17
+#define	AF_MAX		16
 
 /*
  * Structure used by kernel to store most
@@ -117,7 +164,6 @@ struct sockproto {
 #define PF_DLI		AF_DLI
 #define PF_LAT		AF_LAT
 #define	PF_HYLINK	AF_HYLINK
-#define	PF_APPLETALK	AF_APPLETALK
 
 #define	PF_MAX		AF_MAX
 

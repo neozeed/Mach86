@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)boothk.c	7.1 (Berkeley) 6/5/86
+ *	@(#)boothk.c	6.2 (Berkeley) 6/8/85
  */
 
 #include "../h/param.h"
@@ -14,7 +41,7 @@
 #include "saio.h"
 #include "../h/reboot.h"
 
-char bootprog[20] = "hk(0,0)boot";
+char bootprog[] = "hk(0,0)boot";
 
 /*
  * Boot program... arguments passed in r10 and r11
@@ -23,30 +50,18 @@ char bootprog[20] = "hk(0,0)boot";
 
 main()
 {
-	register unsigned howto, devtype;	/* howto=r11, devtype=r10 */
-	int io, unit, partition;
-	register char *cp;
+	register howto, devtype;	/* howto=r11, devtype=r10 */
+	int io;
 
 #ifdef lint
 	howto = 0; devtype = 0;
 #endif
-	unit = (devtype >> B_UNITSHIFT) & B_UNITMASK;
-	unit += 8 * ((devtype >> B_ADAPTORSHIFT) & B_ADAPTORMASK);
-	partition = (devtype >> B_PARTITIONSHIFT) & B_PARTITIONMASK;
-	cp = bootprog + 3;
-	if (unit >= 10)
-		*cp++ = unit / 10 + '0';
-	*cp++ = unit % 10 + '0';
-	*cp++ = ',';
-	if (partition >= 10)
-		*cp++ = partition / 10 + '0';
-	*cp++ = partition % 10 + '0';
-	bcopy((caddr_t) ")boot", cp, 6);
-	printf("loading %s\n", bootprog);
+	printf("loading %s", bootprog);
 	io = open(bootprog, 0);
 	if (io >= 0)
 		copyunix(howto, devtype, io);
-	_stop("boot failed\n");
+	printf("boot failed");
+	_exit();
 }
 
 /*ARGSUSED*/
@@ -78,7 +93,7 @@ copyunix(howto, devtype, io)
 		*addr++ = 0;
 	x.a_entry &= 0x7fffffff;
 	(*((int (*)()) x.a_entry))();
-	return;
+	_exit();
 shread:
 	_stop("Short read\n");
 }

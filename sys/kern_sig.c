@@ -1,14 +1,87 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)kern_sig.c	7.1 (Berkeley) 6/5/86
+ *	@(#)kern_sig.c	6.19 (Berkeley) 9/18/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ *  1-Jun-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	sched.h is now in ../h
+ *
+ * 22-Mar-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Merged VM and Romp versions.
+ *
+ * 14-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Merged in IBM code for Sailboat under ROMP.
+ *	Added ``#ifdef vax'' around ``#include "../vax/mtpr.h" ''
+ *
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 16-Nov-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	CS_BUGFIX:  Fixed several off by one errors in determining
+ *	whether or not a signal was valid.
+ *
+ * 25-May-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT:  changed psig() to use either SOUSIG or SJCSIG bits
+ *	to initiate old-style signal reset actions.
+ *	[V1(1)]
+ *
+ * 21-May-85  Glenn Marcy (gm0w) at Carnegie-Mellon University
+ *	Upgraded from 4.1BSD.  Carried over changes below:
+ *
+ *	CS_XONLY:  No core dump if execute-only.
+ *	CS_SECURITY:  Change current user and group to real user and group
+ *	before creating core file.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_bugfix.h"
+#include "cs_compat.h"
+#include "cs_security.h"
+#include "cs_xonly.h"
+#include "mach_mp.h"
+#include "mach_vm.h"
+#endif	CMU
 
 #include "../machine/reg.h"
 #include "../machine/pte.h"
+#ifndef	romp
 #include "../machine/psl.h"
+#endif	romp
 
 #include "param.h"
 #include "systm.h"
@@ -26,10 +99,14 @@
 #include "acct.h"
 #include "uio.h"
 #include "kernel.h"
+#if	MACH_MP
+#include "../h/sched.h"
+#endif	MACH_MP
+#if	MACH_VM
+#include "../vm/vm_param.h"
+#endif	MACH_VM
 
 #define	cantmask	(sigmask(SIGKILL)|sigmask(SIGCONT)|sigmask(SIGSTOP))
-#define	stopsigmask	(sigmask(SIGSTOP)|sigmask(SIGTSTP)| \
-			sigmask(SIGTTIN)|sigmask(SIGTTOU))
 
 /*
  * Generalized interface signal handler.
@@ -47,7 +124,11 @@ sigvec()
 	int bit;
 
 	sig = uap->signo;
+#if	CS_BUGFIX
+	if (sig <= 0 || sig > NSIG || sig == SIGKILL || sig == SIGSTOP) {
+#else	CS_BUGFIX
 	if (sig <= 0 || sig >= NSIG || sig == SIGKILL || sig == SIGSTOP) {
+#endif	CS_BUGFIX
 		u.u_error = EINVAL;
 		return;
 	}
@@ -302,7 +383,11 @@ psignal(p, sig)
 	register int (*action)();
 	int mask;
 
+#if	CS_BUGFIX
+	if ((unsigned)sig > NSIG)
+#else	CS_BUGFIX
 	if ((unsigned)sig >= NSIG)
+#endif	CS_BUGFIX
 		return;
 	mask = sigmask(sig);
 
@@ -325,6 +410,8 @@ psignal(p, sig)
 		else
 			action = SIG_DFL;
 	}
+#define	stops	(sigmask(SIGSTOP)|sigmask(SIGTSTP)| \
+			sigmask(SIGTTIN)|sigmask(SIGTTOU))
 	if (sig) {
 		p->p_sig |= mask;
 		switch (sig) {
@@ -340,7 +427,7 @@ psignal(p, sig)
 			break;
 
 		case SIGCONT:
-			p->p_sig &= ~stopsigmask;
+			p->p_sig &= ~stops;
 			break;
 
 		case SIGSTOP:
@@ -351,6 +438,7 @@ psignal(p, sig)
 			break;
 		}
 	}
+#undef stops
 	/*
 	 * Defer further processing for signals which are held.
 	 */
@@ -490,7 +578,9 @@ psignal(p, sig)
 		 * It will either never be noticed, or noticed very soon.
 		 */
 		if (p == u.u_procp && !noproc)
+#ifdef vax
 #include "../vax/mtpr.h"
+#endif vax
 			aston();
 		goto out;
 	}
@@ -530,10 +620,11 @@ issig()
 		if ((p->p_flag&STRC) == 0)
 			sigbits &= ~p->p_sigignore;
 		if (p->p_flag&SVFORK)
-			sigbits &= ~stopsigmask;
+#define bit(a) (1<<(a-1))
+			sigbits &= ~(bit(SIGSTOP)|bit(SIGTSTP)|bit(SIGTTIN)|bit(SIGTTOU));
 		if (sigbits == 0)
 			break;
-		sig = ffs((long)sigbits);
+		sig = ffs(sigbits);
 		mask = sigmask(sig);
 		p->p_sig &= ~mask;		/* take the signal! */
 		p->p_cursig = sig;
@@ -545,7 +636,11 @@ issig()
 			psignal(p->p_pptr, SIGCHLD);
 			do {
 				stop(p);
+#if	MACH_MP
+				unix_swtch(0, 0);
+#else	MACH_MP
 				swtch();
+#endif	MACH_MP
 			} while (!procxmt() && p->p_flag&STRC);
 
 			/*
@@ -606,7 +701,11 @@ issig()
 					continue;
 				psignal(p->p_pptr, SIGCHLD);
 				stop(p);
+#if	MACH_MP
+				unix_swtch(0, 0);
+#else	MACH_MP
 				swtch();
+#endif	MACH_MP
 				continue;
 
 			case SIGCONT:
@@ -706,11 +805,26 @@ psig()
 		 * after the signal processing is completed.
 		 */
 		(void) splhigh();
+#if	CS_COMPAT
+		/*
+		 *  If the signal was set using the oldest style call, u_sigmask
+		 *  will be zero and subsequent signals will not be masked.  If
+		 *  the signal was set using the old job control style call,
+		 *  u_sigmask will block subsequent signals and we should reset
+		 *  the signal action to HOLD in case the user process cares.
+		 */
+		if (p->p_flag & (SOUSIG|SJCSIG)) {
+#else	CS_COMPAT
 		if (p->p_flag & SOUSIG) {
+#endif	CS_COMPAT
 			if (sig != SIGILL && sig != SIGTRAP) {
 				u.u_signal[sig] = SIG_DFL;
 				p->p_sigcatch &= ~mask;
 			}
+#if	CS_COMPAT
+			if (u.u_sigmask[sig-1])
+				u.u_signal[sig-1] = SIG_HOLD;
+#endif	CS_COMPAT
 			mask = 0;
 		}
 		if (p->p_flag & SOMASK) {
@@ -758,14 +872,31 @@ core()
 {
 	register struct inode *ip;
 	register struct nameidata *ndp = &u.u_nd;
+#if	MACH_VM
+	vm_size_t	stack_size;
+	vm_offset_t	stack_addr;
+#endif	MACH_VM
 
+#if	CS_XONLY
+	if (u.u_procp->p_flag&SXONLY)
+		return (0);
+#endif	CS_XONLY
+#if	CS_SECURITY
+	u.u_uid = u.u_ruid;
+	u.u_procp->p_uid = u.u_ruid;
+	u.u_gid = u.u_rgid;
+#else	CS_SECURITY
 	if (u.u_uid != u.u_ruid || u.u_gid != u.u_rgid)
 		return (0);
+#endif	CS_SECURITY
 	if (ctob(UPAGES+u.u_dsize+u.u_ssize) >=
 	    u.u_rlimit[RLIMIT_CORE].rlim_cur)
 		return (0);
+#if	MACH_VM
+#else	MACH_VM
 	if (u.u_procp->p_textp && access(u.u_procp->p_textp->x_iptr, IREAD))
 		return (0);
+#endif	MACH_VM
 	u.u_error = 0;
 	ndp->ni_nameiop = CREATE | FOLLOW;
 	ndp->ni_segflg = UIO_SYSSPACE;
@@ -786,20 +917,39 @@ core()
 	}
 	itrunc(ip, (u_long)0);
 	u.u_acflag |= ACORE;
+#if	MACH_VM
+	/*
+	 *	Fool Unix about the size of the stack.  Then
+	 *	let it dump the stack in the way it normally does
+	 *	below.
+	 */
+	stack_addr = u.u_ar0[SP];
+#ifndef	romp
+	stack_size = (vm_offset_t)&u - stack_addr;
+#else	romp
+	stack_size = (vm_offset_t)UAREA - stack_addr;
+#endif	romp
+	stack_size = round_page(stack_size);
+	u.u_ssize = btoc(stack_size);
+#endif	MACH_VM
 	u.u_error = rdwri(UIO_WRITE, ip,
+#ifndef	romp
 	    (caddr_t)&u,
+#else	romp
+	    (caddr_t)UAREA,
+#endif	romp
 	    ctob(UPAGES),
-	    (off_t)0, 1, (int *)0);
+	    0, 1, (int *)0);
 	if (u.u_error == 0)
 		u.u_error = rdwri(UIO_WRITE, ip,
 		    (caddr_t)ctob(dptov(u.u_procp, 0)),
-		    (int)ctob(u.u_dsize),
-		    (off_t)ctob(UPAGES), 0, (int *)0);
+		    ctob(u.u_dsize),
+		    ctob(UPAGES), 0, (int *)0);
 	if (u.u_error == 0)
 		u.u_error = rdwri(UIO_WRITE, ip,
 		    (caddr_t)ctob(sptov(u.u_procp, u.u_ssize - 1)),
-		    (int)ctob(u.u_ssize),
-		    (off_t)ctob(UPAGES)+ctob(u.u_dsize), 0, (int *)0);
+		    ctob(u.u_ssize),
+		    ctob(UPAGES)+ctob(u.u_dsize), 0, (int *)0);
 out:
 	iput(ip);
 	return (u.u_error == 0);

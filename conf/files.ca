@@ -1,0 +1,46 @@
+ca/aedtty.c		optional aed device-driver
+ca/apa8_scroll.c	optional apaetty
+ca/apa8tty.c		optional apaetty
+ca/autoconf.c		standard
+ca/blt.s		standard
+ca/clock.c		standard
+ca/conf.c		standard
+ca/cons.c		standard
+ca/in_cksum.c		optional inet
+ca/machdep.c		standard config-dependent
+ca/mem.c		standard
+ca/mono.c		optional mono
+ca/pcb.c		optional mach_vm
+ca/pup_cksum.c		optional pup
+ca/romp_init.c		optional mach_vm
+ca/screen_conf.c	standard
+ca/sed.c		standard
+ca/sys_machdep.c	standard
+ca/trap.c		standard
+ca/ufs_machdep.c	standard
+ca/undefine.c		standard
+ca/vm_machdep.c		standard
+ca/vmaccess.c		standard
+ca/xFPexception.c	standard
+caif/if_ec.c		optional ec device-driver
+caif/if_un.c		optional un device-driver
+caio/adunload.s		optional hd device-driver
+caio/aed.c		optional aed device-driver
+caio/asy.c		optional asy device-driver
+caio/dk.c		optional dk device-driver
+caio/dma.c		optional fd device-driver
+caio/fd.c		optional fd device-driver
+caio/hd.c		optional hd device-driver
+caio/lp.c		optional lp device-driver
+caio/mouse.c		optional ms device-driver
+caio/psp.c		optional psp device-driver
+caio/st.c		optional st device-driver
+caio/tty_mouse.c	optional ms
+caio/ud.c		optional ud device-driver
+mp/mp_queue.c		optional mach_mp
+/dev/null		optional mach_mpm
+/dev/null		optional en
+/dev/null		optional hy
+/dev/null		optional wb_ml
+/dev/null		optional ds
+/dev/null		optional tms

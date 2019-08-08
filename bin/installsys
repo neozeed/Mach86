@@ -1,0 +1,19 @@
+#
+@ ver = `cat /usr/sys/Melange/version`
+echo -n changing from version $ver to 
+
+@ ver = $ver + 1
+echo " " version $ver
+
+mv ChangedFiles NewFiles DeletedFiles Diffs /usr/sys
+
+rm -f /usr/sys/Tar
+tar crf /usr/sys/Tar `cat /usr/sys/ChangedFiles`  `cat /usr/sys/NewFiles`
+cd /usr/sys
+tar xvf /usr/sys/Tar
+rm -rf `cat /usr/sys/DeletedFiles`
+
+echo Don\'t forget to update the CHANGELOG
+
+unset base
+unset ver

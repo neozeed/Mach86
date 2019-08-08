@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ip_output.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ip_output.c	6.9 (Berkeley) 9/16/85
  */
 
 #include "param.h"
@@ -68,46 +95,40 @@ ip_output(m, opt, ro, flags)
 		bzero((caddr_t)ro, sizeof (*ro));
 	}
 	dst = (struct sockaddr_in *)&ro->ro_dst;
-	/*
-	 * If there is a cached route,
-	 * check that it is to the same destination
-	 * and is still up.  If not, free it and try again.
-	 */
-	if (ro->ro_rt && ((ro->ro_rt->rt_flags & RTF_UP) == 0 ||
-	   dst->sin_addr.s_addr != ip->ip_dst.s_addr)) {
-		RTFREE(ro->ro_rt);
-		ro->ro_rt = (struct rtentry *)0;
-	}
 	if (ro->ro_rt == 0) {
 		dst->sin_family = AF_INET;
 		dst->sin_addr = ip->ip_dst;
-	}
-	/*
-	 * If routing to interface only,
-	 * short circuit routing lookup.
-	 */
-	if (flags & IP_ROUTETOIF) {
-		struct in_ifaddr *ia;
-
-		ia = (struct in_ifaddr *)ifa_ifwithdstaddr(dst);
-		if (ia == 0)
+		/*
+		 * If routing to interface only,
+		 * short circuit routing lookup.
+		 */
+		if (flags & IP_ROUTETOIF) {
+			struct in_ifaddr *ia;
 			ia = in_iaonnetof(in_netof(ip->ip_dst));
-		if (ia == 0) {
-			error = ENETUNREACH;
-			goto bad;
+			if (ia == 0) {
+				error = ENETUNREACH;
+				goto bad;
+			}
+			ifp = ia->ia_ifp;
+			goto gotif;
 		}
-		ifp = ia->ia_ifp;
-	} else {
-		if (ro->ro_rt == 0)
-			rtalloc(ro);
-		if (ro->ro_rt == 0 || (ifp = ro->ro_rt->rt_ifp) == 0) {
-			error = ENETUNREACH;
-			goto bad;
-		}
-		ro->ro_rt->rt_use++;
-		if (ro->ro_rt->rt_flags & (RTF_GATEWAY|RTF_HOST))
-			dst = (struct sockaddr_in *)&ro->ro_rt->rt_gateway;
+		rtalloc(ro);
+	} else if ((ro->ro_rt->rt_flags & RTF_UP) == 0) {
+		/*
+		 * The old route has gone away; try for a new one.
+		 */
+		rtfree(ro->ro_rt);
+		ro->ro_rt = NULL;
+		rtalloc(ro);
 	}
+	if (ro->ro_rt == 0 || (ifp = ro->ro_rt->rt_ifp) == 0) {
+		error = ENETUNREACH;
+		goto bad;
+	}
+	ro->ro_rt->rt_use++;
+	if (ro->ro_rt->rt_flags & (RTF_GATEWAY|RTF_HOST))
+		dst = (struct sockaddr_in *)&ro->ro_rt->rt_gateway;
+gotif:
 #ifndef notdef
 	/*
 	 * If source address not specified yet, use address
@@ -193,7 +214,7 @@ ip_output(m, opt, ro, flags)
 			mh->m_len = sizeof (struct ip) + olen;
 		} else
 			mh->m_len = sizeof (struct ip);
-		mhip->ip_off = (off >> 3) + (ip->ip_off & ~IP_MF);
+		mhip->ip_off = off >> 3;
 		if (ip->ip_off & IP_MF)
 			mhip->ip_off |= IP_MF;
 		if (off + len >= ip->ip_len-hlen)
@@ -238,7 +259,7 @@ ip_insertoptions(m, opt, phlen)
 	register struct ipoption *p = mtod(opt, struct ipoption *);
 	struct mbuf *n;
 	register struct ip *ip = mtod(m, struct ip *);
-	unsigned optlen;
+	int optlen;
 
 	optlen = opt->m_len - sizeof(p->ipopt_dst);
 	if (p->ipopt_dst.s_addr)
@@ -260,7 +281,7 @@ ip_insertoptions(m, opt, phlen)
 		ovbcopy((caddr_t)ip, mtod(m, caddr_t), sizeof(struct ip));
 	}
 	ip = mtod(m, struct ip *);
-	bcopy((caddr_t)p->ipopt_list, (caddr_t)(ip + 1), (unsigned)optlen);
+	bcopy((caddr_t)p->ipopt_list, (caddr_t)(ip + 1), optlen);
 	*phlen = sizeof(struct ip) + optlen;
 	ip->ip_len += optlen;
 	return (m);
@@ -320,7 +341,7 @@ ip_ctloutput(op, so, level, optname, m)
 	case PRCO_SETOPT:
 		switch (optname) {
 		case IP_OPTIONS:
-			return (ip_pcbopts(&inp->inp_options, *m));
+			return (ip_pcbopts(inp, *m));
 
 		default:
 			error = EINVAL;
@@ -336,7 +357,7 @@ ip_ctloutput(op, so, level, optname, m)
 				(*m)->m_off = inp->inp_options->m_off;
 				(*m)->m_len = inp->inp_options->m_len;
 				bcopy(mtod(inp->inp_options, caddr_t),
-				    mtod(*m, caddr_t), (unsigned)(*m)->m_len);
+				    mtod(*m, caddr_t), (*m)->m_len);
 			} else
 				(*m)->m_len = 0;
 			break;
@@ -347,33 +368,34 @@ ip_ctloutput(op, so, level, optname, m)
 		break;
 	}
 	if (op == PRCO_SETOPT)
-		(void)m_free(*m);
+		m_free(*m);
 	return (error);
 }
 
 /*
- * Set up IP options in pcb for insertion in output packets.
- * Store in mbuf with pointer in pcbopt, adding pseudo-option
- * with destination address if source routed.
+ * Set up IP options in inpcb for insertion in output packets.
+ * Store in mbuf, adding pseudo-option with destination address
+ * if source routed.
  */
-ip_pcbopts(pcbopt, m)
-	struct mbuf **pcbopt;
-	register struct mbuf *m;
+ip_pcbopts(inp, m)
+	struct inpcb *inp;
+	struct mbuf *m;
 {
 	register cnt, optlen;
 	register u_char *cp;
 	u_char opt;
 
 	/* turn off any old options */
-	if (*pcbopt)
-		(void)m_free(*pcbopt);
-	*pcbopt = 0;
+	if (inp->inp_options)
+		m_free(inp->inp_options);
+	inp->inp_options = 0;
+
 	if (m == (struct mbuf *)0 || m->m_len == 0) {
 		/*
 		 * Only turning off any previous options.
 		 */
 		if (m)
-			(void)m_free(m);
+			m_free(m);
 		return (0);
 	}
 
@@ -396,7 +418,7 @@ ip_pcbopts(pcbopt, m)
 	cnt = m->m_len;
 	m->m_len += sizeof(struct in_addr);
 	cp = mtod(m, u_char *) + sizeof(struct in_addr);
-	ovbcopy(mtod(m, caddr_t), (caddr_t)cp, (unsigned)cnt);
+	ovbcopy(mtod(m, caddr_t), cp, cnt);
 	bzero(mtod(m, caddr_t), sizeof(struct in_addr));
 
 	for (; cnt > 0; cnt -= optlen, cp += optlen) {
@@ -434,23 +456,21 @@ ip_pcbopts(pcbopt, m)
 			/*
 			 * Move first hop before start of options.
 			 */
-			bcopy((caddr_t)&cp[IPOPT_OFFSET+1], mtod(m, caddr_t),
+			bcopy(&cp[IPOPT_OFFSET+1], mtod(m, caddr_t),
 			    sizeof(struct in_addr));
 			/*
 			 * Then copy rest of options back
 			 * to close up the deleted entry.
 			 */
-			ovbcopy((caddr_t)(&cp[IPOPT_OFFSET+1] +
-			    sizeof(struct in_addr)),
-			    (caddr_t)&cp[IPOPT_OFFSET+1],
-			    (unsigned)cnt + sizeof(struct in_addr));
+			ovbcopy(&cp[IPOPT_OFFSET+1] + sizeof(struct in_addr),
+			    &cp[IPOPT_OFFSET+1], cnt + sizeof(struct in_addr));
 			break;
 		}
 	}
-	*pcbopt = m;
+	inp->inp_options = m;
 	return (0);
 
 bad:
-	(void)m_free(m);
+	m_free(m);
 	return (EINVAL);
 }

@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1980, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1980 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)route.h	7.1 (Berkeley) 6/4/86
+ *	@(#)route.h	6.6 (Berkeley) 9/16/85
  */
 
 /*
@@ -39,11 +66,24 @@ struct rtentry {
 	short	rt_refcnt;		/* # held references */
 	u_long	rt_use;			/* raw # packets forwarded */
 	struct	ifnet *rt_ifp;		/* the answer: interface to use */
+#ifdef BBNNET
+	union {				/* domain specific info */
+	    struct {
+		int in_rt_pc;		/* count of pings not answered */
+	    } rt_in_data;
+
+#define	irt_pings	rt_data.rt_in_data.in_rt_pc
+#define irt_gdown	rt_data.rt_in_data.in_rt_pc
+
+	    char rt_dummy[32];
+	} rt_data;
+#endif
 };
 
 #define	RTF_UP		0x1		/* route useable */
 #define	RTF_GATEWAY	0x2		/* destination is a gateway */
 #define	RTF_HOST	0x4		/* host entry (net otherwise) */
+#define RTF_REINSTATE	0x8		/* re-instate route after timeout */
 #define	RTF_DYNAMIC	0x10		/* created dynamically (by redirect) */
 
 /*

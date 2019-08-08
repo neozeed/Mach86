@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1980 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)if.h	7.1 (Berkeley) 6/4/86
+ *	@(#)if.h	6.8 (Berkeley) 9/16/85
  */
 
 /*
@@ -42,7 +69,6 @@ struct ifnet {
 	short	if_mtu;			/* maximum transmission unit */
 	short	if_flags;		/* up/down, broadcast, etc. */
 	short	if_timer;		/* time 'til if_watchdog called */
-	int	if_metric;		/* routing metric (external only) */
 	struct	ifaddr *if_addrlist;	/* linked list of addresses per if */
 	struct	ifqueue {
 		struct	mbuf *ifq_head;
@@ -70,15 +96,12 @@ struct ifnet {
 #define	IFF_UP		0x1		/* interface is up */
 #define	IFF_BROADCAST	0x2		/* broadcast address valid */
 #define	IFF_DEBUG	0x4		/* turn on debugging */
-#define	IFF_LOOPBACK	0x8		/* is a loopback net */
+/* was	IFF_ROUTE	0x8		/* routing entry installed */
 #define	IFF_POINTOPOINT	0x10		/* interface is point-to-point link */
 #define	IFF_NOTRAILERS	0x20		/* avoid use of trailers */
 #define	IFF_RUNNING	0x40		/* resources allocated */
 #define	IFF_NOARP	0x80		/* no address resolution protocol */
-/* next two not supported now, but reserved: */
-#define	IFF_PROMISC	0x100		/* receive all packets */
-#define	IFF_ALLMULTI	0x200		/* receive all multicast packets */
-/* flags set internally only: */
+					/* flags set internally only: */
 #define	IFF_CANTCHANGE	(IFF_BROADCAST | IFF_POINTOPOINT | IFF_RUNNING)
 
 /*
@@ -176,14 +199,12 @@ struct	ifreq {
 		struct	sockaddr ifru_dstaddr;
 		struct	sockaddr ifru_broadaddr;
 		short	ifru_flags;
-		int	ifru_metric;
 		caddr_t	ifru_data;
 	} ifr_ifru;
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
 #define	ifr_dstaddr	ifr_ifru.ifru_dstaddr	/* other end of p-to-p link */
 #define	ifr_broadaddr	ifr_ifru.ifru_broadaddr	/* broadcast address */
 #define	ifr_flags	ifr_ifru.ifru_flags	/* flags */
-#define	ifr_metric	ifr_ifru.ifru_metric	/* metric */
 #define	ifr_data	ifr_ifru.ifru_data	/* for use by interface */
 };
 
@@ -203,12 +224,25 @@ struct	ifconf {
 #define	ifc_req	ifc_ifcu.ifcu_req	/* array of structures returned */
 };
 
+/*
+ * ARP ioctl request
+ */
+struct arpreq {
+	struct sockaddr	arp_pa;		/* protocol address */
+	struct sockaddr	arp_ha;		/* hardware address */
+	int	arp_flags;		/* flags */
+};
+/*  arp_flags and at_flags field values */
+#define	ATF_INUSE	1	/* entry in use */
+#define ATF_COM		2	/* completed entry (enaddr valid) */
+#define	ATF_PERM	4	/* permanent entry */
+#define	ATF_PUBL	8	/* publish entry (respond for other host) */
+
 #ifdef KERNEL
-#include "../net/if_arp.h"
+#if defined(INET) || defined(BBNNET)
+struct	ifqueue	ipintrq;		/* ip packet input queue */
+#endif
 struct	ifqueue rawintrq;		/* raw packet input queue */
 struct	ifnet *ifnet;
-struct	ifaddr *ifa_ifwithaddr(), *ifa_ifwithnet();
-struct	ifaddr *ifa_ifwithdstaddr();
-#else KERNEL
-#include <net/if_arp.h>
-#endif KERNEL
+struct	ifaddr *ifa_ifwithaddr(), *ifa_ifwithnet(), *ifa_ifwithaf();
+#endif

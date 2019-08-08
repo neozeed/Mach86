@@ -1,10 +1,61 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)subr_xxx.c	7.1 (Berkeley) 6/5/86
+ *	@(#)subr_xxx.c	6.6 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ ************************************************************************
+ * HISTORY
+ * 25-Feb-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	New calloc routine using VM routines.
+ *
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 16-Nov-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	CS_BUGFIX:  Fixed off by one error in ffs.
+ *
+ ************************************************************************
+ */
+
+#include "cs_bugfix.h"
+#include "mach_vm.h"
+#endif	CMU
+
+#if	MACH_VM
+#include "../vm/vm_map.h"
+#include "../vm/vm_kern.h"
+#endif	MACH_VM
 
 #include "../machine/pte.h"
 
@@ -40,7 +91,7 @@ nulldev()
 	return (0);
 }
 
-#ifdef notdef
+#ifndef vax
 imin(a, b)
 {
 
@@ -68,8 +119,15 @@ max(a, b)
 
 	return (a > b ? a : b);
 }
-#endif notdef
+#endif not vax
 
+#if	MACH_VM
+caddr_t calloc(size)
+	int size;
+{
+	return((caddr_t)kmem_alloc(kernel_map, size, TRUE));
+}
+#else	MACH_VM
 extern	cabase, calimit;
 extern	struct pte camap[];
 
@@ -104,8 +162,8 @@ calloc(size)
 	cacur += size;
 	return (res);
 }
+#endif	MACH_VM
 
-#ifdef GPROF
 /*
  * Stub routine in case it is ever possible to free space.
  */
@@ -115,7 +173,6 @@ cfreemem(cp, size)
 {
 	printf("freeing %x, size %d\n", cp, size);
 }
-#endif
 
 #ifndef vax
 ffs(mask)
@@ -123,7 +180,11 @@ ffs(mask)
 {
 	register int i;
 
+#if	CS_BUGFIX
+	for(i = 1; i <= NSIG; i++) {
+#else	CS_BUGFIX
 	for(i = 1; i < NSIG; i++) {
+#endif	CS_BUGFIX
 		if (mask & 1)
 			return (i);
 		mask >>= 1;

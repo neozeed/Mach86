@@ -1,7 +1,82 @@
+OPTIONS/cmu_bugfix	optional cmu_bugfix
+OPTIONS/cs_aid		optional cs_aid
+OPTIONS/cs_boot		optional cs_boot
+OPTIONS/cs_bugfix	optional cs_bugfix
+OPTIONS/cs_compat	optional cs_compat
+OPTIONS/cs_cons		optional cs_cons
+OPTIONS/cs_disk		optional cs_disk
+OPTIONS/cs_gfb		optional cs_gfb
+OPTIONS/cs_rpause	optional cs_rpause
+OPTIONS/cs_generic	optional cs_generic
+OPTIONS/cs_kdb		optional cs_kdb
+OPTIONS/cs_ichk		optional cs_ichk
+OPTIONS/cs_inet		optional cs_inet
+OPTIONS/cs_ipc		optional cs_ipc
+OPTIONS/cs_lint		optional cs_lint
+OPTIONS/cs_msys		optional cs_msys
+OPTIONS/cs_nofile	optional cs_nofile
+OPTIONS/cs_olddir	optional cs_olddir
+OPTIONS/cs_oldfs	optional cs_oldfs
+OPTIONS/cs_quote	optional cs_quote
+OPTIONS/cs_qvss		optional cs_qvss
+OPTIONS/cs_rfs		optional cs_rfs
+OPTIONS/cs_security	optional cs_security
+OPTIONS/cs_socket	optional cs_socket
+OPTIONS/cs_syscall	optional cs_syscall
+OPTIONS/cs_tcp		optional cs_tcp
+OPTIONS/cs_tty		optional cs_tty
+OPTIONS/cs_ttyloc	optional cs_ttyloc
+OPTIONS/cs_xlds		optional cs_xlds
+OPTIONS/cs_xmod		optional cs_xmod
+OPTIONS/cs_xonly	optional cs_xonly
+OPTIONS/cs_vaxm		optional cs_vaxm
+OPTIONS/cpus		optional cpus
+OPTIONS/net_bugfix	optional net_bugfix
+OPTIONS/mach_acc	optional mach_acc
+OPTIONS/mach_load	optional mach_load
+OPTIONS/mach_hp		optional mach_hp
+OPTIONS/mach_mach	optional mach_mach
+OPTIONS/mach_mp		optional mach_mp
+OPTIONS/mach_only	optional mach_only
+OPTIONS/mach_pager	optional mach_pager
+OPTIONS/mach_sem	optional mach_sem
+OPTIONS/mach_shm	optional mach_shm
+OPTIONS/mach_syscall	optional mach_syscall
+OPTIONS/mach_time	optional mach_time
+OPTIONS/mach_tt		optional mach_tt
+OPTIONS/mach_vm		optional mach_vm
+accent/accent.c		optional mach_acc
+accent/accentint.c	optional mach_acc
+accent/accint.c		optional mach_acc
+accent/vmdata.c		optional mach_acc
+accent/vmipc.c		optional mach_acc
+kern/iprintf.c		optional mach_vm
+kern/mach_factor.c	optional mach_vm
+kern/mach_if.c		optional mach_mach
+kern/mach_server.c	optional mach_mach
+kern/mpq_alloc.c	optional mach_vm
+kern/ports.c		optional mach_mach
+kern/sched_prim.c	optional mach_mp
+kern/task.c		optional mach_vm
+kern/thread.c		optional mach_vm
+kern/zalloc.c		optional mach_vm
+mp/imc_subr.c		optional mach_mp
+mp/mp_shmem.c		optional mach_shm
+mp/mp_galloc.c		optional mach_shm
+mp/mp_queuedb.c		optional mach_shm
+mp/queuescan.c		optional mach_mp
+mp/remote_prim.c	optional mach_mp
+mp/remote_subr.c	optional mach_mp
+mp/remote_sw.c		optional mach_mp
+mp/sem_sem.c		optional mach_sem
+mp/sem_user.c		optional mach_sem
+mp/sem_proc.c		optional mach_sem
+mp/slave.c		optional mach_mp
+mp/syscall_sw.c		optional mach_mp
+mp/syscall_subr.c	optional mach_mp
 net/af.c		standard
 net/if.c		standard
 net/if_loop.c		optional loop
-net/if_sl.c		optional sl
 net/raw_cb.c		standard
 net/raw_usrreq.c	standard
 net/route.c		standard
@@ -9,6 +84,7 @@ netimp/if_imp.c		optional imp
 netimp/if_imphost.c	optional imp
 netimp/raw_imp.c	optional imp
 netinet/if_ether.c	optional ether
+netinet/bbn.c		optional cs_compat
 netinet/in.c		optional inet
 netinet/in_pcb.c	optional inet
 netinet/in_proto.c	optional inet
@@ -33,8 +109,16 @@ netns/ns_pcb.c		optional ns
 netns/ns_proto.c	optional ns
 netns/spp_debug.c	optional ns
 netns/spp_usrreq.c	optional ns
+sensor/init_sens.c	optional wb_sens
+sensor/sens_syscalls.c	optional wb_sens
+sync/lock.c		optional mach_mp
+sync/sync_prim.c	optional mach_mp
+sys/cmu_syscalls.c	optional cs_syscall
 sys/init_main.c		standard
 sys/init_sysent.c	standard
+sys/ipc_1.c		optional cs_ipc
+sys/ipc_2.c		optional cs_ipc
+sys/ipc_3.c		optional cs_ipc
 sys/kern_acct.c		standard
 sys/kern_clock.c	standard
 sys/kern_descrip.c	standard
@@ -50,22 +134,33 @@ sys/kern_subr.c		standard
 sys/kern_synch.c	standard
 sys/kern_time.c		standard
 sys/kern_xxx.c		standard
+sys/mpx_dev.c		optional cs_compat
+sys/mpx_sys.c		optional cs_compat
 sys/quota_kern.c	standard
 sys/quota_subr.c	standard
 sys/quota_sys.c		standard
 sys/quota_ufs.c		standard
 sys/subr_log.c		standard
+sys/rfs_descrip.c	optional cs_rfs
+sys/rfs_init.c		optional cs_rfs
+sys/rfs_kern.c		optional cs_rfs
+sys/rfs_socket.c	optional cs_rfs
+sys/rfs_subr.c		optional cs_rfs
+sys/rfs_syscalls.c	optional cs_rfs
 sys/subr_mcount.c	optional profiling-routine
 sys/subr_prf.c		standard
 sys/subr_rmap.c		standard
 sys/subr_xxx.c		standard
 sys/sys_generic.c	standard
 sys/sys_inode.c		standard
+sys/sys_ild.c		optional ild
 sys/sys_process.c	standard
 sys/sys_socket.c	standard
 sys/tty.c		standard
 sys/tty_bk.c		optional bk
 sys/tty_conf.c		standard
+sys/tty_cmupty.c	optional cmupty
+sys/tty_fe.c		optional fe
 sys/tty_pty.c		optional pty
 sys/tty_subr.c		standard
 sys/tty_tb.c		optional tb
@@ -89,15 +184,52 @@ sys/uipc_socket.c	standard
 sys/uipc_socket2.c	standard
 sys/uipc_syscalls.c	standard
 sys/uipc_usrreq.c	standard
-sys/vm_drum.c		standard
-sys/vm_mem.c		standard
-sys/vm_mon.c		standard
-sys/vm_page.c		standard
-sys/vm_proc.c		standard
-sys/vm_pt.c		standard
-sys/vm_sched.c		standard
-sys/vm_subr.c		standard
-sys/vm_sw.c		standard
-sys/vm_swap.c		standard
+sys/vm_drum.c		optional not mach_vm
+sys/vm_mem.c		optional not mach_vm
+sys/vm_mon.c		optional not mach_vm
+sys/vm_page.c		optional not mach_vm
+sys/vm_proc.c		optional not mach_vm
+sys/vm_pt.c		optional not mach_vm
+sys/vm_sched.c		optional not mach_vm
+sys/vm_subr.c		optional not mach_vm
+sys/vm_sw.c		optional not mach_vm
+sys/vm_swap.c		optional not mach_vm
 sys/vm_swp.c		standard
-sys/vm_text.c		standard
+sys/vm_text.c		optional not mach_vm
+bbnnet/icmp.c		optional bbnnet
+bbnnet/ic_output.c	optional bbnnet
+bbnnet/in.c		optional bbnnet
+bbnnet/in_pcb.c		optional bbnnet
+bbnnet/in_proto.c	optional bbnnet
+bbnnet/ip_input.c	optional bbnnet
+bbnnet/ip_output.c	optional bbnnet
+bbnnet/ip_usrreq.c	optional bbnnet
+bbnnet/raw_input.c	optional bbnnet
+bbnnet/tcp_input.c	optional bbnnet
+bbnnet/tcp_prim.c	optional bbnnet
+bbnnet/tcp_procs.c	optional bbnnet
+bbnnet/tcp_states.c	optional bbnnet
+bbnnet/tcp_usrreq.c	optional bbnnet
+bbnnet/udp_usrreq.c	optional bbnnet
+bbnnet/udp.c		optional bbnnet
+bbnnet/hmp.c		optional bbnnet hmp
+bbnnet/hmp_subr.c	optional bbnnet hmp
+bbnnet/hmp_traps.c	optional bbnnet hmp
+bbnnet/rdp_fsm.c	optional bbnnet rdp
+bbnnet/rdp_cksum.s	optional bbnnet
+bbnnet/rdp_input.c	optional bbnnet rdp
+bbnnet/rdp_prim.c	optional bbnnet rdp
+bbnnet/rdp_states.c	optional bbnnet rdp
+bbnnet/rdp_subr.c	optional bbnnet rdp
+bbnnet/rdp_usrreq.c	optional bbnnet rdp
+vm/inode_pager.c	optional mach_vm
+vm/vm_fault.c		optional mach_vm
+vm/vm_init.c		optional mach_vm
+vm/vm_kern.c		optional mach_vm
+vm/vm_map.c		optional mach_vm
+vm/vm_object.c		optional mach_vm
+vm/vm_pageout.c		optional mach_vm
+vm/vm_pager.c		optional mach_vm
+vm/vm_resident.c	optional mach_vm
+vm/vm_unix.c		optional mach_vm
+vm/vm_user.c		optional mach_vm

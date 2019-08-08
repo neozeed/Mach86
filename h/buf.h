@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)buf.h	7.1 (Berkeley) 6/4/86
+ *	@(#)buf.h	6.6 (Berkeley) 6/8/85
  */
 
 /*
@@ -172,7 +199,7 @@ unsigned minphys();
  * mark it as being use (B_BUSY) by a device.
  */
 #define	notavail(bp) { \
-	int x = splbio(); \
+	int x = spl6(); \
 	bremfree(bp); \
 	(bp)->b_flags |= B_BUSY; \
 	splx(x); \
@@ -185,6 +212,6 @@ unsigned minphys();
  * Zero out a buffer's data portion.
  */
 #define	clrbuf(bp) { \
-	blkclr((bp)->b_un.b_addr, (unsigned)(bp)->b_bcount); \
-	(bp)->b_resid = 0; \
+	blkclr(bp->b_un.b_addr, bp->b_bcount); \
+	bp->b_resid = 0; \
 }

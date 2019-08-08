@@ -1,10 +1,47 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)tcp.h	7.1 (Berkeley) 6/5/86
+ *	@(#)tcp.h	6.3 (Berkeley) 6/8/85
  */
+
+#if CMU
+/***********************************************************************
+ * HISTORY
+ * 17-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Added definitions of th_x2 and th_off for Sailboat under switch
+ *	ROMP.
+ *
+ */
+#endif CMU
 
 typedef	u_long	tcp_seq;
 /*
@@ -19,6 +56,10 @@ struct tcphdr {
 #ifdef vax
 	u_char	th_x2:4,		/* (unused) */
 		th_off:4;		/* data offset */
+#endif
+#ifdef romp
+	u_char	th_off:4,		/* data offset */
+		th_x2:4;		/* (unused) */
 #endif
 	u_char	th_flags;
 #define	TH_FIN	0x01
@@ -37,18 +78,8 @@ struct tcphdr {
 #define	TCPOPT_MAXSEG	2
 
 /*
- * Default maximum segment size for TCP.
- * With an IP MSS of 576, this is 536,
- * but 512 is probably more convenient.
+ *  Default maximum segment size for TCP.
+ *  With an IP MSS of 576, this is 536,
+ *  but 512 is probably more convenient.
  */
-#ifdef	lint
-#define	TCP_MSS	536
-#else
 #define	TCP_MSS	MIN(512, IP_MSS - sizeof (struct tcpiphdr))
-#endif
-
-/*
- * User-settable options (used with setsockopt).
- */
-#define	TCP_NODELAY	0x01	/* don't delay send to coalesce packets */
-#define	TCP_MAXSEG	0x02	/* set maximum segment size */

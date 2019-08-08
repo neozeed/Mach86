@@ -1,14 +1,9 @@
-#
-# Copyright (c) 1986 Regents of the University of California.
-# All rights reserved.  The Berkeley software License Agreement
-# specifies the terms and conditions for redistribution.
-#
-#	@(#)Makefile	7.1 (Berkeley) 6/5/86
+#	%M%	%I%	%E%
 #
 # Put the ../h stuff near the end so that subroutine definitions win when
 # there is a struct tag with the same name (eg., vmmeter).  The real
 # solution would probably be for ctags to generate "struct vmmeter" tags.
-CTAGS=	ctags
+CTAGS=	./ctags
 SRCS =	../net/*.[ch] ../netimp/*.[ch] ../netinet/*.[ch] \
 	../netns/*.[ch] ../sys/*.[ch] ../vaxif/*.[ch]  ../vaxmba/*.[ch] \
 	../vaxuba/*.[ch] \
@@ -38,9 +33,8 @@ tags: FRC
 	mv tags tags.old
 	-cp ../machine/astags tags
 	${CTAGS} -a ${SRCS}
-	sort -o tags.new tags
-	mv tags.new tags
-	rm -f tags.old
+	sort -o tags tags
+#	rm tags.old
 
 links:
 	-for i in ${DIRS}; do rm -f ../$$i/tags; \

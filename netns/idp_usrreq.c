@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1984, 1985, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *      @(#)idp_usrreq.c	7.1 (Berkeley) 6/5/86
+ *      @(#)idp_usrreq.c	6.9 (Berkeley) 9/11/85
  */
 
 #include "param.h"
@@ -49,7 +76,7 @@ idp_input(m, nsp, ifp)
 	 * Stuff source address and datagram in user buffer.
 	 */
 	idp_ns.sns_addr = idp->idp_sna;
-	if (ns_neteqnn(idp->idp_sna.x_net, ns_zeronet) && ifp) {
+	if (ns_netof(idp->idp_sna)==0) {
 		register struct ifaddr *ia;
 
 		for (ia = ifp->if_addrlist; ia; ia = ia->ifa_next) {
@@ -107,7 +134,6 @@ idp_drop(nsp, errno)
 	soisdisconnected(so);
 }
 
-int noIdpRoute;
 idp_output(nsp, m0)
 	struct nspcb *nsp;
 	struct mbuf *m0;
@@ -162,9 +188,7 @@ idp_output(nsp, m0)
 			m_freem(m0);
 			return (ENOBUFS);
 		}
-		m->m_off = MMAXOFF - sizeof (struct idp) - 2;
-				/* adjust to start on longword bdry
-				   for NSIP on gould */
+		m->m_off = MMAXOFF - sizeof (struct idp);
 		m->m_len = sizeof (struct idp);
 		m->m_next = m0;
 		idp = mtod(m, struct idp *);
@@ -193,47 +217,19 @@ idp_output(nsp, m0)
 		    (so->so_options & SO_BROADCAST) | NS_ROUTETOIF));
 	/*
 	 * Use cached route for previous datagram if
-	 * possible.  If the previous net was the same
-	 * and the interface was a broadcast medium, or
-	 * if the previous destination was identical,
-	 * then we are ok.
+	 * this is also to the same destination. 
 	 *
 	 * NB: We don't handle broadcasts because that
 	 *     would require 3 subroutine calls.
 	 */
 	ro = &nsp->nsp_route;
-#ifdef ancient_history
-	/*
-	 * I think that this will all be handled in ns_pcbconnect!
-	 */
-	if (ro->ro_rt) {
-		if(ns_neteq(nsp->nsp_lastdst, idp->idp_dna)) {
-			/*
-			 * This assumes we have no GH type routes
-			 */
-			if (ro->ro_rt->rt_flags & RTF_HOST) {
-				if (!ns_hosteq(nsp->nsp_lastdst, idp->idp_dna))
-					goto re_route;
-
-			}
-			if ((ro->ro_rt->rt_flags & RTF_GATEWAY) == 0) {
-				register struct ns_addr *dst =
-						&satons_addr(ro->ro_dst);
-				dst->x_host = idp->idp_dna.x_host;
-			}
-			/* 
-			 * Otherwise, we go through the same gateway
-			 * and dst is already set up.
-			 */
-		} else {
-		re_route:
-			RTFREE(ro->ro_rt);
-			ro->ro_rt = (struct rtentry *)0;
-		}
+	if (ro->ro_rt &&
+		((*(long *)&nsp->nsp_lastnet)!=ns_netof(idp->idp_dna)) &&
+		!(ns_hosteq(satons_addr(ro->ro_dst), idp->idp_dna))) {
+		RTFREE(ro->ro_rt);
+		ro->ro_rt = (struct rtentry *)0;
+		nsp->nsp_lastnet = idp->idp_dna.x_net;
 	}
-	nsp->nsp_lastdst = idp->idp_dna;
-#endif ancient_history
-	if (noIdpRoute) ro = 0;
 	return (ns_output(m, ro, so->so_options & SO_BROADCAST));
 }
 /* ARGSUSED */
@@ -295,10 +291,6 @@ idp_ctloutput(req, so, level, name, value)
 			m->m_len = sizeof(long);
 			m->m_off = MMAXOFF - sizeof(long);
 			*mtod(m, long *) = ns_pexseq++;
-			break;
-
-		default:
-			error = EINVAL;
 		}
 		*value = m;
 		break;
@@ -333,15 +325,12 @@ idp_ctloutput(req, so, level, name, value)
 				    = mtod(*value, struct idp *);
 				nsp->nsp_dpt = idp->idp_pt;
 			}
-			break;
 #ifdef NSIP
+			break;
 
 		case SO_NSIP_ROUTE:
 			error = nsip_route(*value);
-			break;
 #endif NSIP
-		default:
-			error = EINVAL;
 		}
 		if (value && *value)
 			m_freem(*value);

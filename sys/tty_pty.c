@@ -1,10 +1,70 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)tty_pty.c	7.1 (Berkeley) 6/5/86
+ *	@(#)tty_pty.c	6.14 (Berkeley) 9/4/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 27-Sep-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_GENERIC: Expanded NPTY to (64+16).
+ *
+ * 14-May-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	Upgraded to 4.2BSD.  Carried over changes below.  CS_COMPAT:
+ *	retained MPX hooks for now.
+ *	[V1(1)]
+ *
+ * 17-Sep-84  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	CMU_BUGFIX: Put in fix to allow proper flow control in RAW mode.
+ *
+ * 21-Apr-83  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_TTYLOC:  added support for PIOCSLOC call to set terminal
+ *	location from control PTY (V3.06i).
+ *
+ * 30-Mar-83  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_TTYLOC:  added npty definition for cdevsw[] (V3.06h).
+ *
+ **********************************************************************
+ */
+ 
+#include "cmu_bugfix.h"
+#include "cs_compat.h"
+#include "cs_generic.h"
+#include "cs_ttyloc.h"
+#endif	CMU
 
 /*
  * Pseudo-teletype Driver
@@ -24,10 +84,20 @@
 #include "proc.h"
 #include "uio.h"
 #include "kernel.h"
+#if	CS_TTYLOC
+#include "../h/cmupty.h"
+#endif	CS_TTYLOC
+#if	CS_COMPAT
+#include "../h/mx.h"
+#endif	CS_COMPAT
 
 #if NPTY == 1
 #undef NPTY
+#if	CS_GENERIC
+#define	NPTY	(64+16)		/* crude XXX */
+#else	CS_GENERIC
 #define	NPTY	32		/* crude XXX */
+#endif	CS_GENERIC
 #endif
 
 #define BUFSIZ 100		/* Chunk size iomoved to/from user */
@@ -39,6 +109,7 @@
 struct	tty pt_tty[NPTY];
 struct	pt_ioctl {
 	int	pt_flags;
+	int	pt_gensym;
 	struct	proc *pt_selr, *pt_selw;
 	u_char	pt_send;
 	u_char	pt_ucntl;
@@ -108,6 +179,9 @@ again:
 		while (tp == u.u_ttyp && u.u_procp->p_pgrp != tp->t_pgrp) {
 			if ((u.u_procp->p_sigignore & sigmask(SIGTTIN)) ||
 			    (u.u_procp->p_sigmask & sigmask(SIGTTIN)) ||
+	/*
+			    (u.u_procp->p_flag&SDETACH) ||
+	*/
 			    u.u_procp->p_flag&SVFORK)
 				return (EIO);
 			gsignal(u.u_procp->p_pgrp, SIGTTIN);
@@ -207,7 +281,8 @@ ptcopen(dev, flag)
 	if (tp->t_oproc)
 		return (EIO);
 	tp->t_oproc = ptsstart;
-	(void)(*linesw[tp->t_line].l_modem)(tp, 1);
+	if (tp->t_state & TS_WOPEN)
+		wakeup((caddr_t)&tp->t_rawq);
 	tp->t_state |= TS_CARR_ON;
 	pti = &pt_ioctl[minor(dev)];
 	pti->pt_flags = 0;
@@ -222,7 +297,16 @@ ptcclose(dev)
 	register struct tty *tp;
 
 	tp = &pt_tty[minor(dev)];
-	(void)(*linesw[tp->t_line].l_modem)(tp, 0);
+	if (tp->t_line)
+		(*linesw[tp->t_line].l_close)(tp);
+	if (tp->t_state & TS_ISOPEN)
+		gsignal(tp->t_pgrp, SIGHUP);
+	tp->t_state &= ~TS_CARR_ON;	/* virtual carrier gone */
+#if	CS_TTYLOC
+	tp->t_ttyloc.tlc_hostid = TLC_UNKHOST;
+	tp->t_ttyloc.tlc_ttyid = TLC_UNKTTY;
+#endif	CS_TTYLOC
+	ttyflush(tp, FREAD|FWRITE);
 	tp->t_oproc = 0;		/* mark closed */
 }
 
@@ -244,14 +328,14 @@ ptcread(dev, uio)
 	for (;;) {
 		if (tp->t_state&TS_ISOPEN) {
 			if (pti->pt_flags&PF_PKT && pti->pt_send) {
-				error = ureadc((int)pti->pt_send, uio);
+				error = ureadc(pti->pt_send, uio);
 				if (error)
 					return (error);
 				pti->pt_send = 0;
 				return (0);
 			}
 			if (pti->pt_flags&PF_UCNTL && pti->pt_ucntl) {
-				error = ureadc((int)pti->pt_ucntl, uio);
+				error = ureadc(pti->pt_ucntl, uio);
 				if (error)
 					return (error);
 				pti->pt_ucntl = 0;
@@ -277,6 +361,11 @@ ptcread(dev, uio)
 	if (tp->t_outq.c_cc <= TTLOWAT(tp)) {
 		if (tp->t_state&TS_ASLEEP) {
 			tp->t_state &= ~TS_ASLEEP;
+#if	CS_COMPAT
+			if(tp->t_chan)
+				mcstart(tp->t_chan, (caddr_t)&tp->t_outq);
+			else
+#endif	CS_COMPAT
 			wakeup((caddr_t)&tp->t_outq);
 		}
 		if (tp->t_wsel) {
@@ -322,53 +411,36 @@ ptcselect(dev, rw)
 
 	if ((tp->t_state&TS_CARR_ON) == 0)
 		return (1);
+	s = spl5();
 	switch (rw) {
 
 	case FREAD:
-		/*
-		 * Need to block timeouts (ttrstart).
-		 */
-		s = spltty();
 		if ((tp->t_state&TS_ISOPEN) &&
-		     tp->t_outq.c_cc && (tp->t_state&TS_TTSTOP) == 0) {
+		    (pti->pt_flags&PF_PKT && pti->pt_send ||
+		     pti->pt_flags&PF_UCNTL && pti->pt_ucntl ||
+		     tp->t_outq.c_cc && (tp->t_state&TS_TTSTOP) == 0)) {
 			splx(s);
 			return (1);
 		}
-		splx(s);
-		/* FALLTHROUGH */
-
-	case 0:					/* exceptional */
-		if ((tp->t_state&TS_ISOPEN) &&
-		    (pti->pt_flags&PF_PKT && pti->pt_send ||
-		     pti->pt_flags&PF_UCNTL && pti->pt_ucntl))
-			return (1);
 		if ((p = pti->pt_selr) && p->p_wchan == (caddr_t)&selwait)
 			pti->pt_flags |= PF_RCOLL;
 		else
 			pti->pt_selr = u.u_procp;
 		break;
 
-
 	case FWRITE:
-		if (tp->t_state&TS_ISOPEN) {
-			if (pti->pt_flags & PF_REMOTE) {
-			    if (tp->t_canq.c_cc == 0)
-				return (1);
-			} else {
-			    if (tp->t_rawq.c_cc + tp->t_canq.c_cc < TTYHOG-2)
-				    return (1);
-			    if (tp->t_canq.c_cc == 0 &&
-			        (tp->t_flags & (RAW|CBREAK)) == 0)
-				    return (1);
-			}
+		if ((tp->t_state&TS_ISOPEN) &&
+		    ((pti->pt_flags&PF_REMOTE) == 0 || tp->t_canq.c_cc == 0)) {
+			splx(s);
+			return (1);
 		}
 		if ((p = pti->pt_selw) && p->p_wchan == (caddr_t)&selwait)
 			pti->pt_flags |= PF_WCOLL;
 		else
 			pti->pt_selw = u.u_procp;
 		break;
-
 	}
+	splx(s);
 	return (0);
 }
 
@@ -437,8 +509,7 @@ again:
 		}
 		while (cc > 0) {
 			if ((tp->t_rawq.c_cc + tp->t_canq.c_cc) >= TTYHOG - 2 &&
-			   (tp->t_canq.c_cc > 0 ||
-			      tp->t_flags & (RAW|CBREAK))) {
+			    (tp->t_canq.c_cc > 0)) {
 				wakeup((caddr_t)&tp->t_rawq);
 				goto block;
 			}
@@ -477,12 +548,8 @@ ptyioctl(dev, cmd, data, flag)
 	register struct tty *tp = &pt_tty[minor(dev)];
 	register struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	int stop, error;
-	extern ttyinput();
 
-	/*
-	 * IF CONTROLLER STTY THEN MUST FLUSH TO PREVENT A HANG.
-	 * ttywflush(tp) will hang if there are characters in the outq.
-	 */
+	/* IF CONTROLLER STTY THEN MUST FLUSH TO PREVENT A HANG ??? */
 	if (cdevsw[major(dev)].d_open == ptcopen)
 		switch (cmd) {
 
@@ -520,28 +587,22 @@ ptyioctl(dev, cmd, data, flag)
 			return (0);
 
 		case TIOCSETP:
-		case TIOCSETN:
-		case TIOCSETD:
 			while (getc(&tp->t_outq) >= 0)
 				;
 			break;
+#if	CS_TTYLOC
+		case PIOCSLOC:
+		    {
+			tp->t_ttyloc.tlc_hostid = ((struct ttyloc *)data)->tlc_hostid;
+			tp->t_ttyloc.tlc_ttyid = ((struct ttyloc *)data)->tlc_ttyid;
+			return(0);
+		    }
+#endif	CS_TTYLOC
 		}
 	error = ttioctl(tp, cmd, data, flag);
-	/*
-	 * Since we use the tty queues internally,
-	 * pty's can't be switched to disciplines which overwrite
-	 * the queues.  We can't tell anything about the discipline
-	 * from here...
-	 */
-	if (linesw[tp->t_line].l_rint != ttyinput) {
-		(*linesw[tp->t_line].l_close)(tp);
-		tp->t_line = 0;
-		(void)(*linesw[tp->t_line].l_open)(dev, tp);
-		error = ENOTTY;
-	}
 	if (error < 0) {
 		if (pti->pt_flags & PF_UCNTL &&
-		    (cmd & ~0xff) == UIOCCMD(0)) {
+		    (cmd & ~0xff) == _IO(u,0)) {
 			if (cmd & 0xff) {
 				pti->pt_ucntl = (u_char)cmd;
 				ptcwakeup(tp, FREAD);
@@ -554,7 +615,11 @@ ptyioctl(dev, cmd, data, flag)
 	    tp->t_stopc == CTRL(s) && tp->t_startc == CTRL(q);
 	if (pti->pt_flags & PF_NOSTOP) {
 		if (stop) {
+#if	CMU_BUGFIX
 			pti->pt_send &= ~TIOCPKT_NOSTOP;
+#else	CMU_BUGFIX
+			pti->pt_send &= TIOCPKT_NOSTOP;
+#endif	CMU_BUGFIX
 			pti->pt_send |= TIOCPKT_DOSTOP;
 			pti->pt_flags &= ~PF_NOSTOP;
 			ptcwakeup(tp, FREAD);

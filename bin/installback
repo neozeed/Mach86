@@ -1,0 +1,71 @@
+#! /bin/csh -f
+
+set CSYS=`sysname -official`
+set MSYS=`cat /etc/masterhost`
+unset master
+if ($CSYS == $MSYS) set master
+
+# Generate list of files to install
+set files=`cd .back; find . -type f -print`
+foreach file ($files)
+    echo ""
+    echo "[ $file ]"
+    unset ignore
+    set rmflags="-f"
+
+    #  Loop until file matches .back version or no installation
+    while (! $?ignore)
+
+	#  Loop until no more history messages added
+	while (1)
+	    #  File currently exists
+	    if (-f $file) then
+		echo "[ comparing $file and .back/$file ]"
+		diff $file .back/$file | more
+		if ($status == 0) then
+		    echo "[ $file and .back/$file are (now) identical ]"
+		    set ignore
+		    break
+		endif
+	    else
+		echo "[ $file does not currently exist ]"
+	    endif
+	    echo -n "Add history message for $file?  [ no ]  "
+	    set ans="$<"
+	    if ("$ans" =~ [yY] || "$ans" =~ [yY][eE][sS]) then
+		chmod +w .back/$file
+		whist .back/$file
+	    else
+		break
+	    endif
+	end
+	if (! $?ignore) then
+	    echo -n "Install $file?  [ yes ]  "
+	    set ans="$<"
+	    if ("$ans" == "" || "$ans" =~ [yY] || "$ans" =~ [yY][eE][sS]) then
+		set ok
+		if ($?master && -f $file) then
+		    (cd $file:h; ci -k -m" " -t/dev/null $file:t)
+		    if ($status != 0) then
+			unset ok
+		    else
+			chmod +w $file
+		    endif
+		else
+		    if (-f $file) chmod +w $file
+	        endif
+		if ($?ok) then
+		    cp .back/$file $file
+		    chmod -w $file
+		else
+		    echo "[ problem checking in previous version of $file ]"
+		    set rmflags="-i"
+		endif
+	    else
+		set ignore
+	        set rmflags="-i"
+	    endif
+	endif
+    end
+    rm $rmflags .back/$file
+end

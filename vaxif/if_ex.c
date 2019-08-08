@@ -1,14 +1,40 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)if_ex.c	7.1 (Berkeley) 6/5/86
+ *	%W% (Berkeley) %G%
  */
 
 
 #include "ex.h"
-#if NEX > 0
 
 /*
  * Excelan EXOS 204 Interface
@@ -33,12 +59,19 @@
 #include "../net/netisr.h"
 #include "../net/route.h"
 
+#ifdef	BBNNET
+#define	INET
+#endif
 #ifdef	INET
 #include "../netinet/in.h"
 #include "../netinet/in_systm.h"
 #include "../netinet/in_var.h"
 #include "../netinet/ip.h"
 #include "../netinet/if_ether.h"
+#endif
+
+#ifdef PUP
+#include "../netpup/pup.h"
 #endif
 
 #ifdef NS
@@ -90,11 +123,9 @@ struct	ex_softc {
 	int	xs_flags;		/* private flags */
 #define	EX_XPENDING	1		/* xmit rqst pending on EXOS */
 #define	EX_STATPENDING	(1<<1)		/* stats rqst pending on EXOS */
-#define	EX_RUNNING	(1<<2)		/* board is running */
-#define EX_SETADDR	(1<<3)		/* physaddr has been changed */
 	struct	ex_msg *xs_h2xnext;	/* host pointer to request queue */
 	struct	ex_msg *xs_x2hnext;	/* host pointer to reply queue */
-	int	xs_ubaddr;		/* map info for structs below */
+	u_long	xs_ubaddr;		/* map info for structs below */
 #define	UNIADDR(x)	((u_long)(x)&0x3FFFF)
 #define	P_UNIADDR(x)	((u_long)(x)&0x3FFF0)
 	/* the following structures are always mapped in */
@@ -105,18 +136,16 @@ struct	ex_softc {
 	struct	confmsg xs_cm;		/* configuration message */
 	struct	stat_array xs_xsa;	/* EXOS writes stats here */
 	/* end mapped area */
-#define	INCORE_BASE(p)	((caddr_t)((u_long)(&(p)->xs_h2xhdr) & 0xFFFFFFF0))
-#define	RVAL_OFF(unit, n) \
-	((caddr_t)(&(ex_softc[unit].n)) - INCORE_BASE(&ex_softc[unit]))
-#define	LVAL_OFF(unit, n) \
-	((caddr_t)(ex_softc[unit].n) - INCORE_BASE(&ex_softc[unit]))
-#define	H2XHDR_OFFSET(unit)	RVAL_OFF(unit, xs_h2xhdr)
-#define	X2HHDR_OFFSET(unit)	RVAL_OFF(unit, xs_x2hhdr)
-#define	H2XENT_OFFSET(unit)	LVAL_OFF(unit, xs_h2xent)
-#define	X2HENT_OFFSET(unit)	LVAL_OFF(unit, xs_x2hent)
-#define	CM_OFFSET(unit)		RVAL_OFF(unit, xs_cm)
-#define	SA_OFFSET(unit)		RVAL_OFF(unit, xs_xsa)
-#define	INCORE_SIZE(unit)	RVAL_OFF(unit, xs_end)
+#define	INCORE_BASE(p)	(((u_long)(&(p)->xs_h2xhdr)) & 0xFFFFFFF0)
+#define	RVAL_OFF(n)	((u_long)(&(ex_softc[0].n)) - INCORE_BASE(&ex_softc[0]))
+#define	LVAL_OFF(n)	((u_long)(ex_softc[0].n) - INCORE_BASE(&ex_softc[0]))
+#define	H2XHDR_OFFSET	RVAL_OFF(xs_h2xhdr)
+#define	X2HHDR_OFFSET	RVAL_OFF(xs_x2hhdr)
+#define	H2XENT_OFFSET	LVAL_OFF(xs_h2xent)
+#define	X2HENT_OFFSET	LVAL_OFF(xs_x2hent)
+#define	CM_OFFSET	RVAL_OFF(xs_cm)
+#define	SA_OFFSET	RVAL_OFF(xs_xsa)
+#define	INCORE_SIZE	RVAL_OFF(xs_end)
 	int	xs_end;			/* place holder */
 } ex_softc[NEX];
 
@@ -143,25 +172,26 @@ exprobe(reg)
 	 */
 	br = 0x15;
 	cvec = (uba_hd[numuba].uh_lastiv -= 4);
+#ifdef DEBUG
+printf("exprobe%d: cvec = %o\n", ex_ncall, cvec);
+#endif
 	ex_cvecs[ex_ncall].xc_csraddr = addr;
-	ex_cvecs[ex_ncall].xc_cvec = cvec;
+	ex_cvecs[ex_ncall++].xc_cvec = cvec;
 	/*
 	 * Reset EXOS and run self-test (guaranteed to
 	 * complete within 2 seconds).
 	 */
 	addr->xd_porta = EX_RESET;
-	i = 2000;
+	i = 1000000;
 	while (((addr->xd_portb & EX_TESTOK) == 0) && --i)
-		DELAY(1000);
+		;
 	if ((addr->xd_portb & EX_TESTOK) == 0) {
 		printf("ex: self-test failed\n");
 		return 0;
 	}
 #ifdef lint
 	br = br;
-	excdint(0);
 #endif
-	ex_ncall++;
 	return (sizeof(struct exdevice));
 }
 
@@ -178,7 +208,7 @@ exattach(ui)
 	register struct ifnet *ifp = &xs->xs_if;
 	register struct exdevice *addr = (struct exdevice *)ui->ui_addr;
 	register struct ex_msg *bp;
-	int unit = ui->ui_unit;
+
 	ifp->if_unit = ui->ui_unit;
 	ifp->if_name = "ex";
 	ifp->if_mtu = ETHERMTU;
@@ -186,8 +216,7 @@ exattach(ui)
 	/*
 	 * Temporarily map queues in order to configure EXOS
 	 */
-	xs->xs_ubaddr = uballoc(ui->ui_ubanum, INCORE_BASE(xs),
-		INCORE_SIZE(unit), 0);
+	xs->xs_ubaddr = uballoc(ui->ui_ubanum, INCORE_BASE(xs), INCORE_SIZE, 0);
 	exconfig(ui, 0);			/* without interrupts */
 	if (xs->xs_cm.cm_cc) goto badconf;
 
@@ -200,10 +229,13 @@ exattach(ui)
 	bp = xs->xs_x2hnext;
 	while ((bp->mb_status & MH_OWNER) == MH_EXOS)	/* poll for reply */
 		;
-	printf("ex%d: HW %c.%c, NX %c.%c, hardware address %s\n",
-		ui->ui_unit, xs->xs_cm.cm_vc[2], xs->xs_cm.cm_vc[3],
+	printf("ex%d: HW %c.%c, NX %c.%c, addr %x.%x.%x.%x.%x.%x\n",
+		ui->ui_unit,
+		xs->xs_cm.cm_vc[2], xs->xs_cm.cm_vc[3],
 		xs->xs_cm.cm_vc[0], xs->xs_cm.cm_vc[1],
-		ether_sprintf(bp->mb_na.na_addrs));
+		bp->mb_na.na_addrs[0], bp->mb_na.na_addrs[1],
+		bp->mb_na.na_addrs[2], bp->mb_na.na_addrs[3],
+		bp->mb_na.na_addrs[4], bp->mb_na.na_addrs[5]);
 	bcopy((caddr_t)bp->mb_na.na_addrs, (caddr_t)xs->xs_addr,
 	    sizeof (xs->xs_addr));
 
@@ -232,7 +264,6 @@ exreset(unit, uban)
 		return;
 	printf(" ex%d", unit);
 	ex_softc[unit].xs_if.if_flags &= ~IFF_RUNNING;
-	ex_softc[unit].xs_flags &= ~EX_RUNNING;
 	exinit(unit);
 }
 
@@ -255,20 +286,17 @@ exinit(unit)
 	/* not yet, if address still unknown */
 	if (ifp->if_addrlist == (struct ifaddr *)0)
 		return;
-	if (xs->xs_flags & EX_RUNNING)
-		return;
 
-	if ((ifp->if_flags & IFF_RUNNING) == 0) {
-		if (if_ubainit(&xs->xs_ifuba, ui->ui_ubanum,
-		    sizeof (struct ether_header),
-		    (int)btoc(EXMAXRBUF-sizeof(struct ether_header))) == 0) { 
-			printf("ex%d: can't initialize\n", unit);
-			xs->xs_if.if_flags &= ~IFF_UP;
-			return;
-		}
-		xs->xs_ubaddr = uballoc(ui->ui_ubanum, INCORE_BASE(xs),
-			INCORE_SIZE(unit), 0);
+	if (ifp->if_flags & IFF_RUNNING)
+		return;
+	if (if_ubainit(&xs->xs_ifuba, ui->ui_ubanum,
+	    sizeof (struct ether_header),
+	    (int)btoc(EXMAXRBUF-sizeof(struct ether_header))) == 0) { 
+		printf("ex%d: can't initialize\n", unit);
+		xs->xs_if.if_flags &= ~IFF_UP;
+		return;
 	}
+	xs->xs_ubaddr = uballoc(ui->ui_ubanum, INCORE_BASE(xs), INCORE_SIZE, 0);
 	exconfig(ui, 4);		/* with vectored interrupts*/
 	/*
 	 * Put EXOS on the Ethernet, using NET_MODE command
@@ -292,11 +320,8 @@ exinit(unit)
 	ifp->if_timer = EXWATCHINTVL;
 	s = splimp();	/* are interrupts always disabled here, anyway? */
 	exhangrcv(unit);			/* hang receive request */
-	xs->xs_if.if_flags |= IFF_RUNNING;
-	xs->xs_flags |= EX_RUNNING;
-	if (xs->xs_flags & EX_SETADDR)
-		ex_setaddr((u_char *)0, unit);
 	exstart(unit);				/* start transmits */
+	xs->xs_if.if_flags |= IFF_RUNNING;
 	splx(s);
 }
 
@@ -352,10 +377,10 @@ exconfig(ui, itype)
 	cm->cm_nmcast = 0xFF;
 	cm->cm_nhost = 1;
 	cm->cm_h2xba = P_UNIADDR(xs->xs_ubaddr);
-	cm->cm_h2xhdr = H2XHDR_OFFSET(unit);
+	cm->cm_h2xhdr = H2XHDR_OFFSET;
 	cm->cm_h2xtyp = 0;		/* should never wait for rqst buffer */
 	cm->cm_x2hba = cm->cm_h2xba;
-	cm->cm_x2hhdr = X2HHDR_OFFSET(unit);
+	cm->cm_x2hhdr = X2HHDR_OFFSET;
 	cm->cm_x2htyp = itype;		/* 0 for none, 4 for vectored */
 	for (i=0; (addr != ex_cvecs[i].xc_csraddr); i++)
 #ifdef DEBUG
@@ -377,7 +402,7 @@ exconfig(ui, itype)
 	}
 	xs->xs_h2xhdr =
 		xs->xs_h2xent[NH2X-1].mb_link =
-		(u_short)H2XENT_OFFSET(unit);
+		(u_short)H2XENT_OFFSET;
 	xs->xs_h2xnext =
 		xs->xs_h2xent[NH2X-1].mb_next =
 		xs->xs_h2xent;
@@ -392,7 +417,7 @@ exconfig(ui, itype)
 	}
 	xs->xs_x2hhdr =
 		xs->xs_x2hent[NX2H-1].mb_link =
-		(u_short)X2HENT_OFFSET(unit);
+		(u_short)X2HENT_OFFSET;
 	xs->xs_x2hnext =
 		xs->xs_x2hent[NX2H-1].mb_next =
 		xs->xs_x2hent;
@@ -405,7 +430,7 @@ exconfig(ui, itype)
 	shiftreg = (u_long)0x0000FFFF;
 	for (i = 0; i < 8; i++) {
 		if (i == 4)
-			shiftreg = P_UNIADDR(xs->xs_ubaddr) + CM_OFFSET(unit);
+			shiftreg = P_UNIADDR(xs->xs_ubaddr) + CM_OFFSET;
 		while (addr->xd_portb & EX_UNREADY)
 			;
 		addr->xd_portb = (u_char)(shiftreg & 0xFF);
@@ -502,9 +527,6 @@ excdint(unit)
 		case LLNET_STSTCS:
 			xs->xs_if.if_ierrors = xs->xs_xsa.sa_crc;
 			xs->xs_flags &= ~EX_STATPENDING;
-			break;
-		case LLNET_ADDRS:
-		case LLNET_RECV:
 			break;
 #ifdef	DEBUG
 		default:
@@ -676,21 +698,18 @@ exoutput(ifp, m0, dst)
 	register struct mbuf *m = m0;
 	register struct ether_header *eh;
 	register int off;
-	int usetrailers;
 
-	if ((ifp->if_flags & (IFF_UP|IFF_RUNNING)) != (IFF_UP|IFF_RUNNING)) {
-		error = ENETDOWN;
-		goto bad;
-	}
 	switch (dst->sa_family) {
 
 #ifdef INET
 	case AF_INET:
 		idst = ((struct sockaddr_in *)dst)->sin_addr;
-		if (!arpresolve(&xs->xs_ac, m, &idst, edst, &usetrailers))
+		if (!arpresolve(&xs->xs_ac, m, &idst, edst))
 			return (0);	/* if not yet resolved */
 		off = ntohs((u_short)mtod(m, struct ip *)->ip_len) - m->m_len;
-		if (usetrailers && off > 0 && (off & 0x1ff) == 0 &&
+		/* need per host negotiation */
+		if ((ifp->if_flags & IFF_NOTRAILERS) == 0)
+		if (off > 0 && (off & 0x1ff) == 0 &&
 		    m->m_off >= MMINOFF + 2 * sizeof (u_short)) {
 			type = ETHERTYPE_TRAIL + (off>>9);
 			m->m_off -= 2 * sizeof (u_short);
@@ -816,7 +835,7 @@ exwatch(unit)
 	bp->mb_ns.ns_rsrv = 0;
 	bp->mb_ns.ns_nobj = 8;		/* read all 8 stats objects */
 	bp->mb_ns.ns_xobj = 0;		/* starting with the 1st one */
-	bp->mb_ns.ns_bufp = P_UNIADDR(xs->xs_ubaddr) + SA_OFFSET(unit);
+	bp->mb_ns.ns_bufp = P_UNIADDR(xs->xs_ubaddr) + SA_OFFSET;
 	bp->mb_status |= MH_EXOS;
 	addr->xd_portb = EX_NTRUPT;
 exspnd:
@@ -833,7 +852,6 @@ exioctl(ifp, cmd, data)
 	caddr_t data;
 {
 	register struct ifaddr *ifa = (struct ifaddr *)data;
-	register struct ex_softc *xs = &ex_softc[ifp->if_unit];
 	int s = splimp(), error = 0;
 
 	switch (cmd) {
@@ -852,28 +870,12 @@ exioctl(ifp, cmd, data)
 #endif
 #ifdef NS
 		case AF_NS:
-		    {
-			register struct ns_addr *ina = &(IA_SNS(ifa)->sns_addr);
-			
-			if (ns_nullhost(*ina))
-				ina->x_host = *(union ns_host *)(xs->xs_addr);
-			else
-				ex_setaddr(ina->x_host.c_host,ifp->if_unit);
+			IA_SNS(ifa)->sns_addr.x_host =
+				* (union ns_host *) 
+				     (ex_softc[ifp->if_unit].xs_addr);
 			break;
-		    }
 #endif
 		}
-		break;
-
-	case SIOCSIFFLAGS:
-		if ((ifp->if_flags & IFF_UP) == 0 &&
-		    xs->xs_flags & EX_RUNNING) {
-			((struct exdevice *)
-			  (exinfo[ifp->if_unit]->ui_addr))->xd_porta = EX_RESET;
-			xs->xs_flags &= ~EX_RUNNING;
-		} else if (ifp->if_flags & IFF_UP &&
-		    (xs->xs_flags & EX_RUNNING) == 0)
-			exinit(ifp->if_unit);
 		break;
 
 	default:
@@ -882,50 +884,3 @@ exioctl(ifp, cmd, data)
 	splx(s);
 	return (error);
 }
-
-/*
- * set ethernet address for unit
- */
-ex_setaddr(physaddr, unit)
-	u_char *physaddr;
-	int unit;
-{
-	register struct ex_softc *xs = &ex_softc[unit];
-	struct uba_device *ui = exinfo[unit];
-	register struct exdevice *addr= (struct exdevice *)ui->ui_addr;
-	register struct ex_msg *bp;
-	
-	if (physaddr) {
-		xs->xs_flags |= EX_SETADDR;
-		bcopy((caddr_t)physaddr, (caddr_t)xs->xs_addr, 6);
-	}
-	if (! (xs->xs_flags & EX_RUNNING))
-		return;
-	bp = exgetcbuf(xs);
-	bp->mb_rqst = LLNET_ADDRS;
-	bp->mb_na.na_mask = READ_OBJ|WRITE_OBJ;
-	bp->mb_na.na_slot = PHYSSLOT;
-	bcopy((caddr_t)xs->xs_addr, (caddr_t)bp->mb_na.na_addrs, 6);
-	bp->mb_status |= MH_EXOS;
-	addr->xd_portb = EX_NTRUPT;
-	bp = xs->xs_x2hnext;
-	while ((bp->mb_status & MH_OWNER) == MH_EXOS)	/* poll for reply */
-		;
-#ifdef	DEBUG
-	printf("ex%d: reset addr %s\n", ui->ui_unit,
-		ether_sprintf(bp->mb_na.na_addrs));
-#endif
-	/*
-	 * Now, re-enable reception on phys slot.
-	 */
-	bp = exgetcbuf(xs);
-	bp->mb_rqst = LLNET_RECV;
-	bp->mb_nr.nr_mask = ENABLE_RCV|READ_OBJ|WRITE_OBJ;
-	bp->mb_nr.nr_slot = PHYSSLOT;
-	bp->mb_status |= MH_EXOS;
-	addr->xd_portb = EX_NTRUPT;
-	bp = xs->xs_x2hnext;
-	while ((bp->mb_status & MH_OWNER) == MH_EXOS)	/* poll for reply */
-		;
-}
-#endif

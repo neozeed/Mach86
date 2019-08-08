@@ -1,10 +1,66 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)vm_proc.c	7.1 (Berkeley) 6/5/86
+ *	@(#)vm_proc.c	6.5 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 17-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Merged in IBM changes for RT under switch romp.
+ *
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 10-Sep-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Updated for master/slave operation.
+ *
+ * 24-Nov-84  Fil Alleva at Carnegie Mellon University.
+ *	NDS: Vrelvm() and expand() changed to block while SPHYSIO is
+ *	set;  Included "../h/kernel.h" for lbolt.  Both changes to
+ *	support DSC-200.
+ *
+ **********************************************************************
+ */
+
+#include "mach_mp.h"
+
+#include "ds.h"
+#include "mach_vm.h"
+#endif	CMU
+
+#if	MACH_VM
+#else	MACH_VM
 
 #include "../machine/pte.h"
 
@@ -17,6 +73,9 @@
 #include "cmap.h"
 #include "text.h"
 #include "vm.h"
+#if	NDS > 0
+#include "kernel.h"	/* for lbolt */
+#endif	NDS > 0
 
 #ifdef vax
 #include "../vax/mtpr.h"
@@ -34,8 +93,9 @@
 vgetvm(ts, ds, ss)
 	size_t ts, ds, ss;
 {
-
+#ifndef	romp
 	u.u_pcb.pcb_p0lr = AST_NONE;
+#endif	romp
 	setp0lr(ts);
 	setp1lr(P1PAGES - HIGHPAGES);
 	u.u_procp->p_tsize = ts;
@@ -52,13 +112,21 @@ vgetvm(ts, ds, ss)
 vrelvm()
 {
 	register struct proc *p = u.u_procp;
+#if	NDS > 0
+
+        /* Block while SPHYSIO is set, can't be changing our page
+	 * tables while we have someone trying to write memory. FAA
+	 */
+	while (p->p_flag & SPHYSIO)
+	    sleep ((caddr_t) &lbolt, (PZERO-1));
+#endif	NDS > 0
 	
 	/*
 	 * Release memory; text first, then data and stack pages.
 	 */
 	xfree();
-	p->p_rssize -= vmemfree(dptopte(p, 0), (int)p->p_dsize);
-	p->p_rssize -= vmemfree(sptopte(p, p->p_ssize - 1), (int)p->p_ssize);
+	p->p_rssize -= vmemfree(dptopte(p, 0), p->p_dsize);
+	p->p_rssize -= vmemfree(sptopte(p, p->p_ssize - 1), p->p_ssize);
 	if (p->p_rssize != 0)
 		panic("vrelvm rss");
 	/*
@@ -152,6 +220,15 @@ expand(change, region)
 	u_int v;
 
 	p = u.u_procp;
+#if	NDS > 0
+
+        /* Block while SPHYSIO is set, can't be changing our page
+	 * tables while we have someone trying to write memory. FAA
+	 */
+	while (p->p_flag & SPHYSIO)
+	    sleep ((caddr_t) &lbolt, (PZERO-1));
+	
+#endif	NDS > 0
 	if (change == 0)
 		return;
 	if (change % CLSIZE)
@@ -186,8 +263,13 @@ expand(change, region)
 	 * of the stack region in the page tables,
 	 * and expand the page tables if necessary.
 	 */
+#ifdef	vax
 	p0 = u.u_pcb.pcb_p0br + (u.u_pcb.pcb_p0lr&~AST_CLR);
 	p1 = u.u_pcb.pcb_p1br + (u.u_pcb.pcb_p1lr&~PME_CLR);
+#else	vax
+	p0 = u.u_pcb.pcb_p0br + u.u_pcb.pcb_p0lr;
+	p1 = u.u_pcb.pcb_p1br + u.u_pcb.pcb_p1lr;
+#endif	vax
 	if (change > p1 - p0)
 		ptexpand(clrnd(ctopt(change - (p1 - p0))), ods, oss);
 	/* PTEXPAND SHOULD GIVE BACK EXCESS PAGE TABLE PAGES */
@@ -195,8 +277,13 @@ expand(change, region)
 	/*
 	 * Compute the base of the allocated/freed region.
 	 */
+#ifdef	vax
 	p0lr = u.u_pcb.pcb_p0lr&~AST_CLR;
 	p1lr = u.u_pcb.pcb_p1lr&~PME_CLR;
+#else	vax
+	p0lr = u.u_pcb.pcb_p0lr;
+	p1lr = u.u_pcb.pcb_p1lr;
+#endif	vax
 	if (region == 0)
 		base = u.u_pcb.pcb_p0br + p0lr + (change > 0 ? 0 : change);
 	else
@@ -268,7 +355,15 @@ procdup(p, isvfork)
 	 * Snapshot the current u. area pcb and get a u.
 	 * for the new process, a copy of our u.
 	 */
+#if	MACH_MP
+	unix_resume(u.u_procp);
+#else	MACH_MP
+#ifdef romp
+	resume(u.u_procp);
+#else romp
 	resume(pcbb(u.u_procp));
+#endif romp
+#endif	MACH_MP
 	(void) vgetu(p, vmemall, Forkmap, &forkutl, &u);
 
 	/*
@@ -289,7 +384,11 @@ procdup(p, isvfork)
 	 * prototypes in the other area before the exchange.
 	 */
 	if (isvfork) {
+#ifdef	vax
 		forkutl.u_pcb.pcb_p0lr = u.u_pcb.pcb_p0lr & AST_CLR;
+#else	vax
+		forkutl.u_pcb.pcb_p0lr = u.u_pcb.pcb_p0lr;
+#endif	vax
 		forkutl.u_pcb.pcb_p1lr = P1PAGES - HIGHPAGES;
 		vpassvm(u.u_procp, p, &u, &forkutl, Forkmap);
 		/*
@@ -351,10 +450,15 @@ vmdup(p, pte, v, count, type)
 		opte += CLSIZE;
 		(void) vmemall(pte, CLSIZE, p, type);
 		p->p_rssize += CLSIZE;
+#ifdef	romp
+		for (i = 0; i < CLSIZE;	i++)
+			cloneseg((caddr_t)ctob(v+i), pte+i);
+#else	romp
 		for (i = 0; i < CLSIZE; i++) {
 			copyseg((caddr_t)ctob(v+i), (pte+i)->pg_pfnum);
 			*(int *)(pte+i) |= (PG_V|PG_M) + PG_UW;
 		}
+#endif	romp
 		v += CLSIZE;
 		c = &cmap[pgtocm(pte->pg_pfnum)];
 		MUNLOCK(c);
@@ -362,3 +466,4 @@ vmdup(p, pte, v, count, type)
 	}
 	p->p_flag |= SPTECHG;
 }
+#endif	MACH_VM

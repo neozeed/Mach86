@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)if_uba.h	7.1 (Berkeley) 6/5/86
+ *	@(#)if_uba.h	6.3 (Berkeley) 9/16/85
  */
 
 /*
@@ -50,9 +77,7 @@ struct	ifubinfo {
  */
 struct ifrw {
 	caddr_t	ifrw_addr;			/* virt addr of header */
-	short	ifrw_bdp;			/* unibus bdp */
-	short	ifrw_flags;			/* type, etc. */
-#define	IFRW_W	0x01				/* is a transmit buffer */
+	int	ifrw_bdp;			/* unibus bdp */
 	int	ifrw_info;			/* value from ubaalloc */
 	int	ifrw_proto;			/* map register prototype */
 	struct	pte *ifrw_mr;			/* base of map registers */
@@ -67,11 +92,9 @@ struct ifxmt {
 	struct	pte ifw_wmap[IF_MAXNUBAMR];	/* base pages for output */
 	struct	mbuf *ifw_xtofree;		/* pages being dma'd out */
 	short	ifw_xswapd;			/* mask of clusters swapped */
-	short	ifw_nmr;			/* number of entries in wmap */
 };
 #define	ifw_addr	ifrw.ifrw_addr
 #define	ifw_bdp		ifrw.ifrw_bdp
-#define	ifw_flags	ifrw.ifrw_flags
 #define	ifw_info	ifrw.ifrw_info
 #define	ifw_proto	ifrw.ifrw_proto
 #define	ifw_mr		ifrw.ifrw_mr
@@ -96,10 +119,10 @@ struct ifuba {
 #ifdef 	KERNEL
 #define	if_ubainit(ifuba, uban, hlen, nmr) \
 		if_ubaminit(&(ifuba)->ifu_info, uban, hlen, nmr, \
-			&(ifuba)->ifu_r, 1, &(ifuba)->ifu_xmt, 1)
+			&(ifuba)->ifu_r, 1, &(ifuba)->ifu_w, 1)
 #define	if_rubaget(ifu, totlen, off0, ifp) \
 		if_ubaget(&(ifu)->ifu_info, &(ifu)->ifu_r, totlen, off0, ifp)
 #define	if_wubaput(ifu, m) \
-		if_ubaput(&(ifu)->ifu_info, &(ifu)->ifu_xmt, m)
+		if_ubaput(&(ifu)->ifu_info, &(ifu)->ifu_w, m)
 struct	mbuf *if_ubaget();
 #endif

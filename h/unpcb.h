@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)unpcb.h	7.1 (Berkeley) 6/4/86
+ *	@(#)unpcb.h	6.2 (Berkeley) 6/8/85
  */
 
 /*
@@ -26,21 +53,14 @@
  * by a number of other sockets and may also reference a socket (not
  * necessarily one which is referencing it).  This generates
  * the need for unp_refs and unp_nextref to be separate fields.
- *
- * Stream sockets keep copies of receive sockbuf sb_cc and sb_mbcnt
- * so that changes in the sockbuf may be computed to modify
- * back pressure on the sender accordingly.
  */
 struct	unpcb {
 	struct	socket *unp_socket;	/* pointer back to socket */
 	struct	inode *unp_inode;	/* if associated with file */
-	ino_t	unp_ino;		/* fake inode number */
 	struct	unpcb *unp_conn;	/* control block of connected socket */
 	struct	unpcb *unp_refs;	/* referencing socket linked list */
 	struct 	unpcb *unp_nextref;	/* link in unp_refs list */
-	struct	mbuf *unp_addr;		/* bound address of socket */
-	int	unp_cc;			/* copy of rcv.sb_cc */
-	int	unp_mbcnt;		/* copy of rcv.sb_mbcnt */
+	struct	mbuf *unp_remaddr;	/* address of connected socket */
 };
 
 #define	sotounpcb(so)	((struct unpcb *)((so)->so_pcb))

@@ -1,10 +1,61 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ufs_subr.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ufs_subr.c	6.8 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.  [Why does this file use "#ifdef KERNEL"?]
+ *
+ * 13-Jun-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_OLDFS:  Modified badblock() to also check against i-list
+ *	size for old style file systems.
+ *	[V1(1)]
+ *
+ * 20-May-85  Glenn Marcy (gm0w) at Carnegie-Mellon University
+ *	Upgraded to 4.2BSD.  Carried over changes below [V1(1)].
+ *
+ *	CS_ICHK:  Changed inode reference count modification to use
+ *	incr/decr macros to check for consistency.
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_ichk.h"
+#include "cs_oldfs.h"
+#endif	CMU
 
 #ifdef KERNEL
 #include "param.h"
@@ -17,6 +68,9 @@
 #include "user.h"
 #include "quota.h"
 #include "kernel.h"
+#if	CS_OLDFS
+#include "filsys.h"
+#endif	CS_OLDFS
 #else
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -27,6 +81,9 @@
 #include <sys/dir.h>
 #include <sys/user.h>
 #include <sys/quota.h>
+#if	CS_OLDFS
+#include <sys/filsys.h>
+#endif	CS_OLDFS
 #endif
 
 #ifdef KERNEL
@@ -76,7 +133,11 @@ update()
 		    (ip->i_flag & (IMOD|IACC|IUPD|ICHG)) == 0)
 			continue;
 		ip->i_flag |= ILOCKED;
+#if	CS_ICHK
+		iincr_chk(ip);
+#else	CS_ICHK
 		ip->i_count++;
+#endif	CS_ICHK
 		iupdat(ip, &time, &time, 0);
 		iput(ip);
 	}
@@ -109,8 +170,7 @@ syncip(ip)
 	register struct fs *fs;
 	register struct buf *bp;
 	struct buf *lastbufp;
-	long lbn, lastlbn;
-	int s;
+	long lbn, lastlbn, s;
 	daddr_t blkno;
 
 	fs = ip->i_fs;
@@ -126,7 +186,7 @@ syncip(ip)
 			if (bp->b_dev != ip->i_dev ||
 			    (bp->b_flags & B_DELWRI) == 0)
 				continue;
-			s = splbio();
+			s = spl6();
 			if (bp->b_flags & B_BUSY) {
 				bp->b_flags |= B_WANTED;
 				sleep((caddr_t)bp, PRIBIO+1);
@@ -191,7 +251,13 @@ badblock(fs, bn)
 	daddr_t bn;
 {
 
+#if	CS_OLDFS
+	if ((isoldfs(fs) && (bn < fs->fs_oldfs->s_isize || bn >= fs->fs_oldfs->s_fsize))
+	    ||
+	    (unsigned)bn >= fs->fs_size) {
+#else	CS_OLDFS
 	if ((unsigned)bn >= fs->fs_size) {
+#endif	CS_OLDFS
 		printf("bad block %d, ", bn);
 		fserr(fs, "bad block");
 		return (1);
@@ -212,7 +278,7 @@ isblock(fs, cp, h)
 {
 	unsigned char mask;
 
-	switch ((int)fs->fs_frag) {
+	switch (fs->fs_frag) {
 	case 8:
 		return (cp[h] == 0xff);
 	case 4:
@@ -239,7 +305,7 @@ clrblock(fs, cp, h)
 	daddr_t h;
 {
 
-	switch ((int)fs->fs_frag) {
+	switch ((fs)->fs_frag) {
 	case 8:
 		cp[h] = 0;
 		return;
@@ -266,7 +332,7 @@ setblock(fs, cp, h)
 	daddr_t h;
 {
 
-	switch ((int)fs->fs_frag) {
+	switch (fs->fs_frag) {
 
 	case 8:
 		cp[h] = 0xff;
@@ -358,7 +424,7 @@ bufstats()
 		count = 0;
 		for (j = 0; j <= MAXBSIZE/CLBYTES; j++)
 			counts[j] = 0;
-		s = splbio();
+		s = spl6();
 		for (dp = bp->av_forw; dp != bp; dp = dp->av_forw) {
 			counts[dp->b_bufsize/CLBYTES]++;
 			count++;
@@ -373,7 +439,7 @@ bufstats()
 }
 #endif
 
-#if !defined(vax) || defined(VAX630)
+#if !defined(vax)
 /*
  * C definitions of special vax instructions.
  */
@@ -388,9 +454,6 @@ scanc(size, cp, table, mask)
 		cp++;
 	return (end - cp);
 }
-
-#endif
-#if !defined(vax)
 
 skpc(mask, size, cp)
 	register u_char mask;

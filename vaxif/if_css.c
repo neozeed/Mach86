@@ -1,13 +1,39 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)if_css.c	7.1 (Berkeley) 6/5/86
+ *	@(#)if_css.c	6.5 (Berkeley) 9/16/85
  */
 
 #include "css.h"
-#if NCSS > 0
 
 /*
  * DEC/CSS IMP11-A ARPAnet IMP interface driver.
@@ -372,7 +398,7 @@ cssrint(unit)
          * The offset parameter is always 0 since using
          * trailers on the ARPAnet is insane.
          */
-        m = if_rubaget(&sc->css_ifuba, len, 0, sc->css_if);
+        m = if_rubaget(&sc->css_ifuba, len, 0, &sc->css_if);
         if (m == 0)
                 goto setup;
         if ((addr->css_icsr & IN_EOM) == 0) {
@@ -399,4 +425,3 @@ setup:
         addr->css_icsr =
                 IN_HRDY | CSS_IE | IN_WEN | ((info & 0x30000) >> 12) | CSS_GO;
 }
-#endif

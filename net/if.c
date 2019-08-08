@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1980, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1980 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)if.c	7.1 (Berkeley) 6/4/86
+ *	@(#)if.c	6.9 (Berkeley) 9/16/85
  */
 
 #include "param.h"
@@ -143,7 +170,6 @@ ifa_ifwithnet(addr)
 	return ((struct ifaddr *)0);
 }
 
-#ifdef notdef
 /*
  * Find an interface using a specific address family
  */
@@ -160,7 +186,6 @@ ifa_ifwithaf(af)
 			return (ifa);
 	return ((struct ifaddr *)0);
 }
-#endif
 
 /*
  * Mark an interface down and notify protocols of
@@ -238,7 +263,7 @@ ifioctl(so, cmd, data)
 	case SIOCGIFCONF:
 		return (ifconf(cmd, data));
 
-#if defined(INET) && NETHER > 0
+#if (defined(INET) || defined(BBNNET)) && NETHER > 0
 	case SIOCSARP:
 	case SIOCDARP:
 		if (!suser())
@@ -258,13 +283,7 @@ ifioctl(so, cmd, data)
 		ifr->ifr_flags = ifp->if_flags;
 		break;
 
-	case SIOCGIFMETRIC:
-		ifr->ifr_metric = ifp->if_metric;
-		break;
-
 	case SIOCSIFFLAGS:
-		if (!suser())
-			return (u.u_error);
 		if (ifp->if_flags & IFF_UP && (ifr->ifr_flags & IFF_UP) == 0) {
 			int s = splimp();
 			if_down(ifp);
@@ -274,12 +293,6 @@ ifioctl(so, cmd, data)
 			(ifr->ifr_flags &~ IFF_CANTCHANGE);
 		if (ifp->if_ioctl)
 			(void) (*ifp->if_ioctl)(ifp, cmd, data);
-		break;
-
-	case SIOCSIFMETRIC:
-		if (!suser())
-			return (u.u_error);
-		ifp->if_metric = ifr->ifr_metric;
 		break;
 
 	default:

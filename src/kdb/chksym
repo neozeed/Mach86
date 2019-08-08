@@ -1,0 +1,9 @@
+#!/bin/csh -fx
+set OBJS=(access.o command.o expr.o format.o input.o main.o message.o opset.o optab.o output.o pcs.o print.o reset.o runpcs.o setup.o sym.o)
+
+set COMMON=c.tmp
+set USED=u.tmp
+nm -pg message.o | sed -n -e 's;^.........C ;;p' | sort >${COMMON}
+ld $OBJS
+nm -pg | sed -n -e 's;^.......... ;;p' | sort >${USED}
+sed <${USED} -e '/^_kdb/d' | comm -23 - ${COMMON}

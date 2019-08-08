@@ -1,10 +1,87 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)sys_generic.c	7.1 (Berkeley) 6/5/86
+ *	@(#)sys_generic.c	6.12 (Berkeley) 6/17/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 10-May-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	fixed a CS_NOFILE ifdef to also require CS_XMOD.  All of this
+ *	should go away anyway.
+ *
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 13-Jan-86  Robert V Baron (rvb) at Carnegie-Mellon University
+ *	add sensors for mll
+ *
+ * 10-Oct-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Apply bug fix for selwakeup.
+ *
+ * 12-Aug-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT:  Changed rwuio() to allow restarts unless old
+ *	signal mechanism is in use without job-control.
+ *	[V1(1)]
+ *
+ * 03-Aug-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_RPAUSE:  added resource pause hook in rwuio() for
+ *	disk space exhaustion.
+ *
+ * 29-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT:  Added MPX hooks for now.
+ *	[V1(1)]
+ *
+ * 12-Jun-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_NOFILE:  carried over FIOCXNOF ioctl call.
+ *	[V1(1)]
+ *
+ * 20-May-85  Glenn Marcy (gm0w) at Carnegie-Mellon University
+ *	Upgraded from 4.1BSD.  Carried over changes below:
+ *
+ *	CS_COMPAT:  Added stty()/gtty() compatability routines.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_compat.h"
+#include "cs_rpause.h"
+#include "cs_xmod.h"
+#include "cs_nofile.h"
+#include "cmu_bugfix.h"
+#include "wb_sens.h"
+#endif	CMU
 
 #include "param.h"
 #include "systm.h"
@@ -17,6 +94,10 @@
 #include "kernel.h"
 #include "stat.h"
 
+#if	NWB_SENS > 0
+#include "inode.h"
+#include "../sensor/sys_sensors.h"
+#endif	NWB_SENS > 0
 /*
  * Read system call.
  */
@@ -42,19 +123,19 @@ readv()
 	register struct a {
 		int	fdes;
 		struct	iovec *iovp;
-		unsigned iovcnt;
+		int	iovcnt;
 	} *uap = (struct a *)u.u_ap;
 	struct uio auio;
 	struct iovec aiov[16];		/* XXX */
 
-	if (uap->iovcnt > sizeof(aiov)/sizeof(aiov[0])) {
+	if (uap->iovcnt <= 0 || uap->iovcnt > sizeof(aiov)/sizeof(aiov[0])) {
 		u.u_error = EINVAL;
 		return;
 	}
 	auio.uio_iov = aiov;
 	auio.uio_iovcnt = uap->iovcnt;
 	u.u_error = copyin((caddr_t)uap->iovp, (caddr_t)aiov,
-	    uap->iovcnt * sizeof (struct iovec));
+	    (unsigned)(uap->iovcnt * sizeof (struct iovec)));
 	if (u.u_error)
 		return;
 	rwuio(&auio, UIO_READ);
@@ -68,7 +149,7 @@ write()
 	register struct a {
 		int	fdes;
 		char	*cbuf;
-		unsigned count;
+		int	count;
 	} *uap = (struct a *)u.u_ap;
 	struct uio auio;
 	struct iovec aiov;
@@ -85,19 +166,19 @@ writev()
 	register struct a {
 		int	fdes;
 		struct	iovec *iovp;
-		unsigned iovcnt;
+		int	iovcnt;
 	} *uap = (struct a *)u.u_ap;
 	struct uio auio;
 	struct iovec aiov[16];		/* XXX */
 
-	if (uap->iovcnt > sizeof(aiov)/sizeof(aiov[0])) {
+	if (uap->iovcnt <= 0 || uap->iovcnt > sizeof(aiov)/sizeof(aiov[0])) {
 		u.u_error = EINVAL;
 		return;
 	}
 	auio.uio_iov = aiov;
 	auio.uio_iovcnt = uap->iovcnt;
 	u.u_error = copyin((caddr_t)uap->iovp, (caddr_t)aiov,
-	    uap->iovcnt * sizeof (struct iovec));
+	    (unsigned)(uap->iovcnt * sizeof (struct iovec)));
 	if (u.u_error)
 		return;
 	rwuio(&auio, UIO_WRITE);
@@ -113,6 +194,12 @@ rwuio(uio, rw)
 	register struct file *fp;
 	register struct iovec *iov;
 	int i, count;
+#if	CS_RPAUSE
+	int rcount;	/* resume count */
+#endif	CS_RPAUSE
+#if	NWB_SENS > 0
+	struct inode *ip;
+#endif	NWB_SENS > 0
 
 	GETF(fp, ((struct a *)u.u_ap)->fdes);
 	if ((fp->f_flag&(rw==UIO_READ ? FREAD : FWRITE)) == 0) {
@@ -135,8 +222,20 @@ rwuio(uio, rw)
 		iov++;
 	}
 	count = uio->uio_resid;
+#if	CS_RPAUSE
+resume:
+	rcount = uio->uio_resid;
+#endif	CS_RPAUSE
+#if	CS_COMPAT
+	if (fp->f_flag&FMP)
+		uio->uio_offset = 0;
+	else
+		uio->uio_offset = fp->f_offset;
+	if (/*(u.u_procp->p_flag&SJCSIG == 0) &&*/ setjmp(&u.u_qsave)) {
+#else	CS_COMPAT
 	uio->uio_offset = fp->f_offset;
 	if (setjmp(&u.u_qsave)) {
+#endif	CS_COMPAT
 		if (uio->uio_resid == count) {
 			if ((u.u_sigintr & sigmask(u.u_procp->p_cursig)) != 0)
 				u.u_error = EINTR;
@@ -146,8 +245,54 @@ rwuio(uio, rw)
 	} else
 		u.u_error = (*fp->f_ops->fo_rw)(fp, rw, uio);
 	u.u_r.r_val1 = count - uio->uio_resid;
+#if	NWB_SENS > 0
+ 	ip = (struct inode *)(fp->f_data);
+ 	if (rw == UIO_READ)					    
+ 		{						    
+ 		ReadSensor(ip->i_dev,				    
+ 			ip->i_number,				    
+ 			fp->f_offset,				    
+ 			u.u_r.r_val1);				    
+ 		}						    
+ 	else if (rw == UIO_WRITE)				    
+ 		{						    
+ 		WriteSensor(ip->i_dev,				    
+ 			ip->i_number,				    
+ 			fp->f_offset,				    
+ 			u.u_r.r_val1);				    
+ 		}						    
+#endif	NWB_SENS > 0
+#if	CS_COMPAT
+	if ((fp->f_flag&FMP) == 0)
+#endif	CS_COMPAT
+#if	CS_RPAUSE
+	fp->f_offset += (rcount - uio->uio_resid);
+	if (u.u_error && fspause()) goto resume;
+#else	CS_RPAUSE
 	fp->f_offset += u.u_r.r_val1;
+#endif	CS_RPAUSE
 }
+#if	CS_COMPAT
+ 
+ 
+ 
+/*
+ * stty/gtty writearound
+ */
+stty()
+{
+	u.u_arg[2] = u.u_arg[1];
+	u.u_arg[1] = TIOCSETP;
+	ioctl();
+}
+ 
+gtty()
+{
+	u.u_arg[2] = u.u_arg[1];
+	u.u_arg[1] = TIOCGETP;
+	ioctl();
+}
+#endif	CS_COMPAT
 
 /*
  * Ioctl system call
@@ -165,6 +310,14 @@ ioctl()
 	char data[IOCPARM_MASK+1];
 
 	uap = (struct a *)u.u_ap;
+#if	CS_NOFILE && CS_XMOD
+	if ((uap->cmd&0xffff)==(FIOCXNOF&0xffff))
+	{
+		if (uap->fdes > NOFILE)
+			u.u_error = EBADF;
+		return;
+	}
+#endif	CS_NOFILE && CS_XMOD
 	GETF(fp, uap->fdes);
 	if ((fp->f_flag & (FREAD|FWRITE)) == 0) {
 		u.u_error = EBADF;
@@ -266,8 +419,8 @@ select()
 	int s, ncoll, ni;
 	label_t lqsave;
 
-	bzero((caddr_t)ibits, sizeof(ibits));
-	bzero((caddr_t)obits, sizeof(obits));
+	bzero(ibits, sizeof(ibits));
+	bzero(obits, sizeof(obits));
 	if (uap->nd > NOFILE)
 		uap->nd = NOFILE;	/* forgiving, if slightly wrong */
 	ni = howmany(uap->nd, NFDBITS);
@@ -275,7 +428,7 @@ select()
 #define	getbits(name, x) \
 	if (uap->name) { \
 		u.u_error = copyin((caddr_t)uap->name, (caddr_t)&ibits[x], \
-		    (unsigned)(ni * sizeof(fd_mask))); \
+		    ni * sizeof(fd_mask)); \
 		if (u.u_error) \
 			goto done; \
 	}
@@ -335,11 +488,11 @@ done:
 #define	putbits(name, x) \
 	if (uap->name) { \
 		int error = copyout((caddr_t)&obits[x], (caddr_t)uap->name, \
-		    (unsigned)(ni * sizeof(fd_mask))); \
+		    ni * sizeof(fd_mask)); \
 		if (error) \
 			u.u_error = error; \
 	}
-	if (u.u_error == 0) {
+	if (u.u_error != EINTR) {
 		putbits(in, 0);
 		putbits(ou, 1);
 		putbits(ex, 2);

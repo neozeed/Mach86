@@ -1,10 +1,57 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)vm_sched.c	7.1 (Berkeley) 6/5/86
+ *	@(#)vm_sched.c	6.7 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ * HISTORY
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 16-Nov-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	CS_GENERIC: Don't print the interleaved swap message.
+ *
+ *  4-Sep-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Added checks to prevent active processes from swapping.
+ */
+
+#include "cs_generic.h"
+#include "mach_mp.h"
+#include "mach_vm.h"
+#endif	CMU
+
+#if	MACH_VM
+#else	MACH_VM
 
 #include "param.h"
 #include "systm.h"
@@ -17,7 +64,9 @@
 #include "cmap.h"
 #include "kernel.h"
 
-
+#if	MACH_MP
+#include "../mp/sched.h"
+#endif	MACH_MP
 
 int	maxslp = MAXSLP;
 int	saferss = SAFERSS;
@@ -145,8 +194,28 @@ loop:
 			/*
 			 * Kick out deadwood.
 			 */
+#if	MACH_MP
+			int	s = splhigh();
+
+			lock_write(&sched_lock);
+			if (!(rp->p_flag&SACTIVE)) {
+				lock_write_done(&sched_lock);
+				splx(s);
+			}
+			else {
+				rp->p_flag &= ~SLOAD;
+				if (rp->p_stat == SRUN)
+					unix_remrq(rp);
+				lock_write_done(&sched_lock);
+				splx(s);
+				(void) swapout(rp, rp->p_dsize, rp->p_ssize);
+				goto loop;
+			}
+#else	MACH_MP
 			rp->p_flag &= ~SLOAD;
 			(void) swapout(rp, rp->p_dsize, rp->p_ssize);
+			goto loop;
+#endif	MACH_MP
 		}
 		continue;
 	}
@@ -260,9 +329,22 @@ hardswap:
 	 */
 	if (sleeper || desperate && p || deservin && inpri > maxslp) {
 		(void) splhigh();
+#if	MACH_MP
+		lock_write(&sched_lock);
+		if (p->p_flag&SACTIVE) {
+			lock_write_done(&sched_lock);
+			(void) spl0();
+			goto loop;
+		}
+		p->p_flag &= ~SLOAD;
+		if (p->p_stat == SRUN)
+			unix_remrq(p);
+		lock_write_done(&sched_lock);
+#else	MACH_MP
 		p->p_flag &= ~SLOAD;
 		if (p->p_stat == SRUN)
 			remrq(p);
+#endif	MACH_MP
 		(void) spl0();
 		if (desperate) {
 			/*
@@ -279,8 +361,7 @@ hardswap:
 			gives = 0;	/* someone else taketh away */
 		if (swapout(p, p->p_dsize, p->p_ssize) == 0)
 			deficit -= imin(gives, deficit);
-		else
-			goto loop;
+		goto loop;
 	}
 	/*
 	 * Want to swap someone in, but can't
@@ -458,3 +539,4 @@ loadav(avg, n)
 	for (i = 0; i < 3; i++)
 		avg[i] = cexp[i] * avg[i] + n * (1.0 - cexp[i]);
 }
+#endif	MACH_VM

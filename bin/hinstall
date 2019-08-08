@@ -1,0 +1,94 @@
+#! /bin/csh -f
+
+set owner = mach
+set group = mach
+set dir = /usr/mach
+set usrdir = /usr/include
+set incdir = $dir/include
+
+unsetenv MORE
+
+foreach d (accent accent/vax mp net netimp netinet stand sync sys vax vaxif vaxmba vaxuba vm)
+    if ($d == "sys") then
+	cd /usr/sys/h
+    else
+	cd /usr/sys/$d
+    endif
+    foreach f (*.h)
+	if (-e $usrdir/$d/$f) then
+	    cmp -s $f $usrdir/$d/$f
+	    set stat = $status
+	    if ($stat == 0) then
+		if (-e $incdir/$d/$f) then
+		    cmp -s $f $incdir/$d/$f
+		    set stat = $status
+		    echo ""
+		    echo "[ $d/$f ]"
+		    if ($stat == 0) then
+			echo "[ $dir version of $d/$f needs to be deleted ]"
+			echo -n "Remove $incdir/$d/$f ?  [no] "
+			set ans = "$<"
+			if ("$ans" =~ [yY] || "$ans" =~ [yY][eE][sS]) then
+			    echo "[ removing $incdir/$d/$f ]"
+			    rm -f $incdir/$d/$f
+			endif
+		    else
+			echo "[ comparing $incdir/$d/$f and $f ]"
+			diff $incdir/$d/$f $f | more
+			echo "[ $dir version of $d/$f needs to be merged ]"
+		    endif
+		endif
+		continue
+	    endif
+	    if (! -e $incdir/$d/$f) then
+		echo ""
+		echo "[ $d/$f ]"
+		echo "[ comparing $usrdir/$d/$f and $f ]"
+		diff $usrdir/$d/$f $f | more
+		echo "[ $dir version of $d/$f needs to be created ]"
+		echo -n "Create $incdir/$d/$f ?  [yes] "
+		set ans = "$<"
+		if ("$ans" == "" || "$ans" =~ [yY] || "$ans" =~ [yY][eE][sS]) then
+		    echo "[ creating $incdir/$d/$f ]"
+		    cp $f $incdir/$d/$f
+		    chown $owner $incdir/$d/$f
+		    chgrp $group $incdir/$d/$f
+		    chmod 644 $incdir/$d/$f
+		endif
+		continue
+	    endif
+	endif
+	if (-e $incdir/$d/$f) then
+	    cmp -s $f $incdir/$d/$f
+	    set stat = $status
+	    if ($stat == 0) continue
+	    echo ""
+	    echo "[ $d/$f ]"
+	    echo "[ comparing $incdir/$d/$f and $f ]"
+	    diff $incdir/$d/$f $f | more
+	    echo "[ $dir version of $d/$f needs to be updated ]"
+	    echo -n "Update $incdir/$d/$f ?  [no] "
+	    set ans = "$<"
+	    if ("$ans" =~ [yY] || "$ans" =~ [yY][eE][sS]) then
+		echo "[ updating $incdir/$d/$f ]"
+		cp -i $f $incdir/$d/$f
+		chown $owner $incdir/$d/$f
+		chgrp $group $incdir/$d/$f
+		chmod 644 $incdir/$d/$f
+	    endif
+	    continue
+	endif
+	echo ""
+	echo "[ $d/$f ]"
+	echo "[ $dir version of $d/$f needs to be created ]"
+	echo -n "Create $incdir/$d/$f ?  [yes] "
+	set ans = "$<"
+	if ("$ans" == "" || "$ans" =~ [yY] || "$ans" =~ [yY][eE][sS]) then
+	    echo "[ creating $incdir/$d/$f ]"
+	    cp $f $incdir/$d/$f
+	    chown $owner $incdir/$d/$f
+	    chgrp $group $incdir/$d/$f
+	    chmod 644 $incdir/$d/$f
+	endif
+    end
+end

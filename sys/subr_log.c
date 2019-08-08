@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)subr_log.c	7.1 (Berkeley) 6/5/86
+ *	@(#)subr_log.c	6.6 (Berkeley) 9/4/85
  */
 
 /*
@@ -33,11 +60,25 @@ struct logsoftc {
 
 int	log_open;			/* also used in log() */
 
+#ifdef LOGDEBUG
+/*VARARGS1*/
+xprintf(fmt, x1)
+	char *fmt;
+	unsigned x1;
+{
+
+	prf(fmt, &x1, 1, (struct tty *)0);
+}
+#endif
+
 /*ARGSUSED*/
 logopen(dev)
 	dev_t dev;
 {
 
+#ifdef LOGDEBUG
+	xprintf("logopen: dev=0x%x\n", dev);
+#endif
 	if (log_open)
 		return (EBUSY);
 	log_open = 1;
@@ -56,6 +97,9 @@ logopen(dev)
 		for (i=0; i < MSG_BSIZE; i++)
 			msgbuf.msg_bufc[i] = 0;
 	}
+#ifdef LOGDEBUG
+	xprintf("logopen: bufx=%d, bufr=%d\n", msgbuf.msg_bufx, msgbuf.msg_bufr);
+#endif
 	return (0);
 }
 
@@ -67,6 +111,9 @@ logclose(dev, flag)
 	logsoftc.sc_state = 0;
 	logsoftc.sc_selp = 0;
 	logsoftc.sc_pgrp = 0;
+#ifdef LOGDEBUG
+	xprintf("logclose: dev=0x%x\n", dev);
+#endif
 }
 
 /*ARGSUSED*/
@@ -75,8 +122,13 @@ logread(dev, uio)
 	struct uio *uio;
 {
 	register long l;
+	register u_int c;
 	register int s;
 	int error = 0;
+
+#ifdef LOGDEBUG
+	xprintf("logread: dev=0x%x\n", dev);
+#endif
 
 	s = splhigh();
 	while (msgbuf.msg_bufr == msgbuf.msg_bufx) {
@@ -94,14 +146,18 @@ logread(dev, uio)
 		l = msgbuf.msg_bufx - msgbuf.msg_bufr;
 		if (l < 0)
 			l = MSG_BSIZE - msgbuf.msg_bufr;
-		l = MIN(l, uio->uio_resid);
-		if (l == 0)
+		c = min((u_int) l, (u_int)uio->uio_resid);
+#ifdef LOGDEBUG
+		xprintf("logread: bufx=%d, bufr=%d, l=%d, c=%d\n",
+			msgbuf.msg_bufx, msgbuf.msg_bufr, l, c);
+#endif
+		if (c <= 0)
 			break;
 		error = uiomove((caddr_t)&msgbuf.msg_bufc[msgbuf.msg_bufr],
-			(int)l, UIO_READ, uio);
+			(int)c, UIO_READ, uio);
 		if (error)
 			break;
-		msgbuf.msg_bufr += l;
+		msgbuf.msg_bufr += c;
 		if (msgbuf.msg_bufr < 0 || msgbuf.msg_bufr >= MSG_BSIZE)
 			msgbuf.msg_bufr = 0;
 	}
@@ -118,15 +174,26 @@ logselect(dev, rw)
 	switch (rw) {
 
 	case FREAD:
-		if (msgbuf.msg_bufr != msgbuf.msg_bufx) {
-			splx(s);
-			return (1);
-		}
+		if (msgbuf.msg_bufr != msgbuf.msg_bufx)
+			goto win;
+#ifdef LOGDEBUG
+		if (logsoftc.sc_selp)
+			xprintf("logselect: collision\n");
+#endif
 		logsoftc.sc_selp = u.u_procp;
+		break;
+
+	case FWRITE:
+#ifdef LOGDEBUG
+		xprintf("logselect: FWRITE\n");
+#endif
 		break;
 	}
 	splx(s);
 	return (0);
+win:
+	splx(s);
+	return (1);
 }
 
 logwakeup()

@@ -1,10 +1,64 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)dir.h	7.1 (Berkeley) 6/4/86
+ *	@(#)dir.h	6.2 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 03-Aug-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_OLDDIR:  made dirtemplate definition visible outside
+ *	KERNEL.
+ *	[V1(1)]
+ *
+ * 13-May-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	Upgraded from 4.1BSD.
+ *	CS_COMPAT:  retained old directory format structure for now.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#ifdef	KERNEL
+#include "cs_compat.h"
+#include "cs_olddir.h"
+#else	KERNEL
+#include <sys/features.h>
+#endif	KERNEL
+#endif	CMU
 
 /*
  * A directory consists of some number of blocks of DIRBLKSIZ
@@ -35,6 +89,14 @@
 #if !defined(KERNEL) && !defined(DEV_BSIZE)
 #define	DEV_BSIZE	512
 #endif
+#if	CS_COMPAT
+#define	ODIRSIZ	14
+struct	odirect
+{
+	u_short	od_ino;
+	char	od_name[ODIRSIZ];
+};
+#endif	CS_COMPAT
 #define DIRBLKSIZ	DEV_BSIZE
 #define	MAXNAMLEN	255
 
@@ -76,6 +138,12 @@ extern	void seekdir();
 extern	void closedir();
 #endif
 
+#if	CS_OLDDIR
+#ifndef	KERNEL
+#define	_KERNEL
+#define	KERNEL
+#endif	KERNEL
+#endif	CS_OLDDIR
 #ifdef KERNEL
 /*
  * Template for manipulating directories.
@@ -93,3 +161,9 @@ struct dirtemplate {
 	char	dotdot_name[4];		/* ditto */
 };
 #endif
+#if	CS_OLDDIR
+#ifdef	_KERNEL
+#undef	KERNEL
+#undef	_KERNEL
+#endif	_KERNEL
+#endif	CS_OLDDIR

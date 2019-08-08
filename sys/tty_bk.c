@@ -1,10 +1,46 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)tty_bk.c	7.1 (Berkeley) 6/5/86
+ *	@(#)tty_bk.c	6.3 (Berkeley) 6/8/85
  */
+
+#if CMU
+/***********************************************************************
+ * HISTORY
+ * 16-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Changed spl5 calls to spl2 calls if ROMP is defined.
+ *
+ */
+#endif CMU
 
 #include "bk.h"
 
@@ -67,7 +103,11 @@ bkclose(tp)
 {
 	register int s;
 
+#ifdef	romp
+	s = spl2();
+#else	romp
 	s = spl5();
+#endif	romp
 	wakeup((caddr_t)&tp->t_rawq);
 	if (tp->t_bufp) {
 		brelse(tp->t_bufp);
@@ -98,7 +138,11 @@ bkread(tp, uio)
 
 	if ((tp->t_state&TS_CARR_ON)==0)
 		return (-1);
+#ifdef	romp
+	s = spl2();
+#else	romp
 	s = spl5();
+#endif	romp
 	while (tp->t_rec == 0 && tp->t_line == NETLDISC)
 		sleep((caddr_t)&tp->t_rawq, TTIPRI);
 	splx(s);

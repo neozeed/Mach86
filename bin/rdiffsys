@@ -1,0 +1,22 @@
+#
+# HISTORY
+#  11-Sep-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+#	Added extra functionality for detecting new or deleted files.
+#	Does not detect new directories, so when new directories are
+#	created, dummy directories should be created in /usr/sys before
+#	running diffsys.
+#
+rm -f diffs
+foreach dir (accent bin conf emul h lib mp net netimp netinet netpup stand \
+	      stand.avie src sync sys vax vaxif vaxmba vaxuba)
+	diff -r $dir /usr/sys/$dir >>& diffs
+end
+sed '/^Common/d\
+/^Binary/d' diffs >Diffs
+grep "^diff -r" Diffs | sed 's/^.*\/..\/wb1\/usr\/sys\///' > ChangedFiles
+grep "^Only" Diffs > t1
+grep "/usr/sys" t1 > t2
+sed -e 's?^.*/usr/sys/??' -e 's?: ?/?' t2 > DeletedFiles
+grep -v "/usr/sys" t1 > t2
+sed -e 's?Only in ??' -e 's?: ?/?' t2 > NewFiles
+rm diffs t1 t2

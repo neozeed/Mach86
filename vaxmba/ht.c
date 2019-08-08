@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ht.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ht.c	6.5 (Berkeley) 6/8/85
  */
 
 #include "tu.h"
@@ -120,11 +147,9 @@ htopen(dev, flag)
 	int olddens, dens;
 
 	tuunit = TUUNIT(dev);
-	if (tuunit >= NTU || (mi = htinfo[HTUNIT(dev)]) == 0 ||
-	    mi->mi_alive == 0)
+	if (tuunit >= NTU || (sc = &tu_softc[tuunit])->sc_openf ||
+	    (mi = htinfo[HTUNIT(dev)]) == 0 || mi->mi_alive == 0)
 		return (ENXIO);
-	if ((sc = &tu_softc[tuunit])->sc_openf)
-		return (EBUSY);
 	olddens = sc->sc_dens;
 	dens = sc->sc_dens =
 	    ((minor(dev)&H_1600BPI)?HTTC_1600BPI:HTTC_800BPI)|
@@ -378,7 +403,7 @@ htndtint(mi)
 	sc->sc_erreg = er;
 	sc->sc_resid = fc;
 	if (bp == &chtbuf[HTUNIT(bp->b_dev)]) {
-		switch ((int)bp->b_command) {
+		switch (bp->b_command) {
 		case HT_REWOFFL:
 			/* offline is on purpose; don't do anything special */
 			ds |= HTDS_MOL;	

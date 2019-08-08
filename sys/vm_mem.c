@@ -1,10 +1,76 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)vm_mem.c	7.1 (Berkeley) 6/5/86
+ *	@(#)vm_mem.c	6.9 (Berkeley) 6/8/85
  */
+#if	CMU
+
+/*
+ **********************************************************************
+ * HISTORY
+ * 16-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Added changes from IBM under switch ROMP to support operation on
+ *	a Sailboat.
+ *
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 11-Oct-85  Robert V Baron (rvb) at Carnegie-Mellon University
+ *	shared memory is treated much the way that the "kernelmap"
+ *	is.  It is a separate map (shmap) in the SYSMAP and it has
+ *	an allocator shmemall and deallocator shmemfree that work
+ * 	just like zmemall.  They get pages from the cmap and stuff
+ *	them into shmap, using shrmap as the resource map.
+ *
+ *  8-Mar-85  Robert V Baron (rvb) at Carnegie-Mellon University
+ *	must displace physical pages by load point in memall, etc
+ *
+ * 13-Feb-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Added munhash bugfix.
+ **********************************************************************
+ *
+ */
+ 
+#include "cmu_bugfix.h"
+#include "mach_shm.h"
+#include "mach_load.h"
+#include "mach_vm.h"
+#endif	CMU
+
+#if	MACH_VM
+#else	MACH_VM
+#ifdef	romp
+#include "../machine/rosetta.h"
+#endif	romp
 
 #include "../machine/pte.h"
 
@@ -23,6 +89,14 @@
 #include "trace.h"
 #include "map.h"
 #include "kernel.h"
+
+#ifdef	DEBUG
+#include "../ca/debug.h"
+#endif	DEBUG
+
+#if	MACH_SHM
+#include "../mp/shmem.h"
+#endif	MACH_SHM
 
 /*
  * Allocate memory, and always succeed
@@ -100,8 +174,7 @@ vmemfree(pte, count)
 				for (j = 0; j < CLSIZE; j++)
 					*(int *)(pte+j) &= PG_PROT;
 				if (c->c_type == CTEXT)
-					distpte(&text[c->c_ndx], c->c_page,
-					    pte);
+					distpte(&text[c->c_ndx], (int)c->c_page, pte);
 				c->c_gone = 1;
 				goto free;
 			}
@@ -170,6 +243,10 @@ memall(pte, size, p, type)
 	register struct cmap *c;
 	register struct pte *rpte;
 	register struct proc *rp;
+#ifdef	romp
+	register struct hatipt_entry *ipte;
+	unsigned sid;
+#endif	romp
 	int i, j, next, curpos;
 	unsigned pf;
 	struct cmap *c1, *c2;
@@ -192,9 +269,30 @@ memall(pte, size, p, type)
 		cmap[next].c_prev = CMHEAD;
 		if (c->c_free == 0)
 			panic("dup mem alloc");
+#ifdef	romp
+#if	MACH_LOAD
+		if ((pf = cmtopg(curpos)) > maxfree + loadpg)
+#else	MACH_LOAD
+		if ((pf = cmtopg(curpos)) > maxfree)
+#endif	MACH_LOAD
+#else	romp
+#if	MACH_LOAD
+		if (cmtopg(curpos) > maxfree + loadpg)
+#else	MACH_LOAD
 		if (cmtopg(curpos) > maxfree)
+#endif	MACH_LOAD
+#endif	romp
 			panic("bad mem alloc");
+#ifndef	romp
 		if (c->c_gone == 0 && c->c_type != CSYS) {
+#else	romp
+		/* clear out any previous mapping */
+		if (c->c_gone == 0)
+			if (c->c_type == CSYS)
+				mapout(&pf, CLSIZE);
+					/* note: using pf as a pte */
+			else {
+#endif	romp
 			if (c->c_type == CTEXT)
 				rp = text[c->c_ndx].x_caddr;
 			else
@@ -217,28 +315,48 @@ memall(pte, size, p, type)
 			}
 			zapcl(rpte, pg_pfnum) = 0;
 			if (c->c_type == CTEXT)
-				distpte(&text[c->c_ndx], c->c_page, rpte);
+				distpte(&text[c->c_ndx], (int)c->c_page, rpte);
 		}
 		switch (type) {
 
 		case CSYS:
 			c->c_ndx = p->p_ndx;
+#ifdef	romp
+			sid = RTA_SID_SYSTEM; /* kernel poopa */
+#endif	romp
 			break;
 
 		case CTEXT:
 			c->c_page = vtotp(p, ptetov(p, pte));
 			c->c_ndx = p->p_textp - &text[0];
+#ifdef	romp
+			sid = make410sid( p->p_textp );
+#endif	romp
 			break;
 
 		case CDATA:
 			c->c_page = vtodp(p, ptetov(p, pte));
 			c->c_ndx = p->p_ndx;
+#ifdef	romp
+			sid = p->p_tsize
+                             ? makeUsid(p)     /* 410/413 data in P1 */
+                             : make407sid(p);  /* 407 data in P0 */
+#endif	romp
 			break;
 
 		case CSTACK:
 			c->c_page = vtosp(p, ptetov(p, pte));
 			c->c_ndx = p->p_ndx;
+#ifdef	romp
+			sid = makeUsid(p);      /* user stack in P1 */
+#endif 	romp
 			break;
+#ifdef	romp
+		case CUSTRUCT:
+                       c->c_ndx = p->p_ndx;
+                       sid = makeUsid(p);      /* upages in P1 */
+			break;
+#endif	romp
 		}
 		if (c->c_blkno) {
 			/*
@@ -261,17 +379,44 @@ memall(pte, size, p, type)
 				}
 				c2->c_hlink = c1->c_hlink;
 			}
+#if	CMU_BUGFIX
+			/*
+			 *  USENIX Bug #51
+			 *
+			 *  The (daddr_t)(u_long) causes the c_blkno field to
+			 *  be sign extended which causes havoc for large block
+			 *  numbers.
+			 */
+ 			if (mfind(c->c_mdev == MSWAPX ?
+			      swapdev : mount[c->c_mdev].m_dev,
+			      c->c_blkno))
+				panic("memall mfind");
+#else	CMU_BUGFIX
 			if (mfind(c->c_mdev == MSWAPX ?
 			      swapdev : mount[c->c_mdev].m_dev,
 			      (daddr_t)(u_long)c->c_blkno))
 				panic("memall mfind");
+#endif	CMU_BUGFIX
 			c1->c_mdev = 0;
 			c1->c_blkno = 0;
 			c1->c_hlink = 0;
 		}
+#ifndef	romp
 		pf = cmtopg(curpos);
 		for (j = 0; j < CLSIZE; j++)
 			*(int *)pte++ = pf++;
+#else	romp
+		/* map in all the pages	in this click */
+		ipte = &RTA_HATIPT[pf];
+#ifdef DEBUG
+		if (vmdebug)
+			printf("sid=%x,ipte=%x\n", sid,ipte);
+#endif DEBUG
+		for (j = 0; j < CLSIZE; j++) {
+			ipte->key_addrtag = sid << RTA_VPAGE_BITS;
+			*(int *)pte++ = pf++;
+		}
+#endif	romp
 		c->c_free = 0;
 		c->c_gone = 0;
 		if (c->c_intrans || c->c_want)
@@ -309,12 +454,21 @@ memfree(pte, size, detach)
 	while (size > 0) {
 		size -= CLSIZE;
 		i = pte->pg_pfnum;
+#if	MACH_LOAD
+		if (i < firstfree + loadpg || i > maxfree + loadpg)
+#else	MACH_LOAD
 		if (i < firstfree || i > maxfree)
+#endif	MACH_LOAD
 			panic("bad mem free");
 		i = pgtocm(i);
 		c = &cmap[i];
 		if (c->c_free)
 			panic("dup mem free");
+#ifdef	romp
+		if (c->c_type != CSYS)	 /* added 3/84	*/
+			mapout(pte, CLSIZE);
+
+#endif	romp
 		if (detach && c->c_type != CSYS) {
 			for (j = 0; j < CLSIZE; j++)
 				*(int *)(pte+j) &= PG_PROT;
@@ -403,6 +557,48 @@ wmemfree(va, n)
 		(void) memfree(&Usrptmap[a], npg, 0);
 	rmfree(kernelmap, (long)npg, (long)a);
 }
+
+#if	MACH_SHM
+/*
+ * Allocate wired-down (non-paged) pages in shared memory map.
+ * (and clear them)
+ */
+caddr_t
+shmemall(pmemall, n)
+	int (*pmemall)(), n;
+{
+	register int npg;
+	register caddr_t va;
+	register int a;
+
+	npg = clrnd(btoc(n));
+	a = rmalloc(shrmap, (long)npg);
+	if (a == 0)
+		return (0);
+	if ((*pmemall)(&shmap[a], npg, &proc[0], CSYS) == 0) {
+		rmfree(shrmap, (long)npg, (long)a);
+		return (0);
+	}
+	va = (caddr_t) (shutl + a * NBPG);
+	shmaccess(&shmap[a], va, npg);
+	bzero(va, n);
+	return (va);
+}
+
+shmemfree(va, n)
+	caddr_t va;
+	int n;
+{
+	register int a, npg;
+	npg = clrnd(btoc(n));
+
+	a = (va - shutl) / NBPG;
+	(void) memfree(&shmap[a], npg, 0);
+	shmvoid(&shmap[a], va, npg);
+
+	rmfree(shrmap, (long)npg, (long)a);
+}
+#endif	MACH_SHM
 
 /*
  * Enter clist block c on the hash chains.
@@ -544,6 +740,18 @@ meminit(first, last)
 	if (ecmx < freemem / CLSIZE)
 		freemem = ecmx * CLSIZE;
 	for (i = 1; i <= freemem / CLSIZE; i++) {
+#ifdef	romp
+		unsigned temp_pte;    /* note: used as a pte */
+		/* unlink that real page from hatipt */
+		temp_pte = firstfree+i-1;
+		if (ishole(temp_pte)) {
+			c = &cmap[i];
+			c->c_type = CSYS;
+			c->c_free = 0;
+			continue;	/* do not put into free list */
+		}
+		mapout((struct pte *)&temp_pte,1); /* link this page as free */
+#endif	romp
 		cmap[i-1].c_next = i;
 		c = &cmap[i];
 		c->c_prev = i-1;
@@ -627,11 +835,6 @@ vslock(base, count)
 	while (npf > 0) {
 		if (pte->pg_v) {
 			c = &cmap[pgtocm(pte->pg_pfnum)];
-			if (c->c_lock) {
-				MLOCK(c);
-				MUNLOCK(c);
-				continue;
-			}
 			MLOCK(c);
 		} else
 			pagein(ctob(v), 1);	/* return it locked */
@@ -657,8 +860,16 @@ vsunlock(base, count, rw)
 		c = &cmap[pgtocm(pte->pg_pfnum)];
 		MUNLOCK(c);
 		if (rw == B_READ)	/* Reading from device writes memory */
+#ifndef	romp
 			pte->pg_m = 1;
+#else	romp
+		{
+			pte->pg_m = 1;
+			set_mod_bit(pte->pg_pfnum,1);
+		}
+#endif	romp
 		pte += CLSIZE;
 		npf -= CLSIZE;
 	}
 }
+#endif	MACH_VM

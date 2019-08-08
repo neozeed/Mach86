@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1980, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1980 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)raw_usrreq.c	7.1 (Berkeley) 6/4/86
+ *	@(#)raw_usrreq.c	6.8 (Berkeley) 6/8/85
  */
 
 #include "param.h"
@@ -19,7 +46,9 @@
 #include "netisr.h"
 #include "raw_cb.h"
 
+#ifdef	vax
 #include "../vax/mtpr.h"
+#endif	vax
 
 /*
  * Initialize raw connection block q.
@@ -142,7 +171,7 @@ next:
 /*ARGSUSED*/
 raw_ctlinput(cmd, arg)
 	int cmd;
-	struct sockaddr *arg;
+	caddr_t arg;
 {
 
 	if (cmd < 0 || cmd > PRC_NCMDS)
@@ -159,8 +188,6 @@ raw_usrreq(so, req, m, nam, rights)
 	register struct rawcb *rp = sotorawcb(so);
 	register int error = 0;
 
-	if (req == PRU_CONTROL)
-		return (EOPNOTSUPP);
 	if (rights && rights->m_len) {
 		error = EOPNOTSUPP;
 		goto release;
@@ -232,6 +259,8 @@ raw_usrreq(so, req, m, nam, rights)
 			error = ENOTCONN;
 			break;
 		}
+		if (rp->rcb_route.ro_rt)
+			rtfree(rp->rcb_route.ro_rt);
 		raw_disconnect(rp);
 		soisdisconnected(so);
 		break;
@@ -258,6 +287,22 @@ raw_usrreq(so, req, m, nam, rights)
 			error = ENOTCONN;
 			break;
 		}
+		/*
+		 * Check for routing.  If new foreign address, or
+		 * no route presently in use, try to allocate new
+		 * route.  On failure, just hand packet to output
+		 * routine anyway in case it can handle it.
+		 */
+		if ((rp->rcb_flags & RAW_DONTROUTE) == 0)
+			if (!equal(rp->rcb_faddr, rp->rcb_route.ro_dst) ||
+			    rp->rcb_route.ro_rt == 0) {
+				if (rp->rcb_route.ro_rt) {
+					RTFREE(rp->rcb_route.ro_rt);
+					rp->rcb_route.ro_rt = NULL;
+				}
+				rp->rcb_route.ro_dst = rp->rcb_faddr;
+				rtalloc(&rp->rcb_route);
+			}
 		error = (*so->so_proto->pr_output)(m, so);
 		m = NULL;
 		if (nam)
@@ -279,11 +324,11 @@ raw_usrreq(so, req, m, nam, rights)
 	/*
 	 * Not supported.
 	 */
+	case PRU_CONTROL:
 	case PRU_RCVOOB:
 	case PRU_RCVD:
 		return(EOPNOTSUPP);
 
-	case PRU_LISTEN:
 	case PRU_ACCEPT:
 	case PRU_SENDOOB:
 		error = EOPNOTSUPP;

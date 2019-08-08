@@ -1,10 +1,53 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)in.c	7.1 (Berkeley) 6/5/86
+ *	@(#)in.c	6.9 (Berkeley) 9/16/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 29-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_TTYLOC:  Added myipaddr routine.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_ttyloc.h"
+#endif	CMU
 
 #include "param.h"
 #include "ioctl.h"
@@ -101,7 +144,6 @@ in_netof(in)
 /*
  * Return the host portion of an internet address.
  */
-u_long
 in_lnaof(in)
 	struct in_addr in;
 {
@@ -130,15 +172,9 @@ in_lnaof(in)
 	return (host);
 }
 
-#ifndef SUBNETSARELOCAL
-#define	SUBNETSARELOCAL	1
-#endif
-int subnetsarelocal = SUBNETSARELOCAL;
 /*
  * Return 1 if an internet address is for a ``local'' host
- * (one to which we have a connection).  If subnetsarelocal
- * is true, this includes other subnets of the local net.
- * Otherwise, it includes only the directly-connected (sub)nets.
+ * (one to which we have a connection through a local logical net).
  */
 in_localaddr(in)
 	struct in_addr in;
@@ -155,7 +191,7 @@ in_localaddr(in)
 		net = i & IN_CLASSC_NET;
 
 	for (ia = in_ifaddr; ia; ia = ia->ia_next)
-		if (net == subnetsarelocal ? ia->ia_net : ia->ia_subnet)
+		if (net == ia->ia_net)
 			return (1);
 	return (0);
 }
@@ -176,7 +212,6 @@ in_control(so, cmd, data, ifp)
 {
 	register struct ifreq *ifr = (struct ifreq *)data;
 	register struct in_ifaddr *ia = 0;
-	u_long tmp;
 	struct ifaddr *ifa;
 	struct mbuf *m;
 	int error;
@@ -191,9 +226,18 @@ in_control(so, cmd, data, ifp)
 
 	switch (cmd) {
 
+	case SIOCGIFADDR:
+	case SIOCGIFBRDADDR:
+	case SIOCGIFDSTADDR:
+	case SIOCGIFNETMASK:
+		if (ia == (struct in_ifaddr *)0)
+			return (EADDRNOTAVAIL);
+		break;
+
 	case SIOCSIFADDR:
-	case SIOCSIFNETMASK:
 	case SIOCSIFDSTADDR:
+	case SIOCSIFBRDADDR:
+	case SIOCSIFNETMASK:
 		if (!suser())
 			return (u.u_error);
 
@@ -222,16 +266,6 @@ in_control(so, cmd, data, ifp)
 				in_interfaces++;
 		}
 		break;
-
-	case SIOCSIFBRDADDR:
-		if (!suser())
-			return (u.u_error);
-		/* FALLTHROUGH */
-
-	default:
-		if (ia == (struct in_ifaddr *)0)
-			return (EADDRNOTAVAIL);
-		break;
 	}
 
 	switch (cmd) {
@@ -259,37 +293,18 @@ in_control(so, cmd, data, ifp)
 		break;
 
 	case SIOCSIFDSTADDR:
-	    {
-		struct sockaddr oldaddr;
-
 		if ((ifp->if_flags & IFF_POINTOPOINT) == 0)
 			return (EINVAL);
-		oldaddr = ia->ia_dstaddr;
-		ia->ia_dstaddr = ifr->ifr_dstaddr;
 		if (ifp->if_ioctl &&
-		    (error = (*ifp->if_ioctl)(ifp, SIOCSIFDSTADDR, ia))) {
-			ia->ia_dstaddr = oldaddr;
+		    (error = (*ifp->if_ioctl)(ifp, SIOCSIFDSTADDR, ia)))
 			return (error);
-		}
-		if (ia->ia_flags & IFA_ROUTE) {
-			rtinit(&oldaddr, &ia->ia_addr, (int)SIOCDELRT,
-			    RTF_HOST);
-			rtinit(&ia->ia_dstaddr, &ia->ia_addr, (int)SIOCADDRT,
-			    RTF_HOST|RTF_UP);
-		}
-	    }
+		ia->ia_dstaddr = ifr->ifr_dstaddr;
 		break;
 
 	case SIOCSIFBRDADDR:
 		if ((ifp->if_flags & IFF_BROADCAST) == 0)
 			return (EINVAL);
 		ia->ia_broadaddr = ifr->ifr_broadaddr;
-		tmp = ntohl(satosin(&ia->ia_broadaddr)->sin_addr.s_addr);
-		if ((tmp &~ ia->ia_subnetmask) == ~ia->ia_subnetmask)
-			tmp |= ~ia->ia_netmask;
-		else if ((tmp &~ ia->ia_subnetmask) == 0)
-			tmp &= ia->ia_netmask;
-		ia->ia_netbroadcast.s_addr = htonl(tmp);
 		break;
 
 	case SIOCSIFADDR:
@@ -317,43 +332,22 @@ in_ifinit(ifp, ia, sin)
 	struct sockaddr_in *sin;
 {
 	register u_long i = ntohl(sin->sin_addr.s_addr);
-	struct sockaddr oldaddr;
 	struct sockaddr_in netaddr;
 	int s = splimp(), error;
-
-	oldaddr = ia->ia_addr;
-	ia->ia_addr = *(struct sockaddr *)sin;
-
-	/*
-	 * Give the interface a chance to initialize
-	 * if this is its first address,
-	 * and to validate the address if necessary.
-	 */
-	if (ifp->if_ioctl && (error = (*ifp->if_ioctl)(ifp, SIOCSIFADDR, ia))) {
-		splx(s);
-		ia->ia_addr = oldaddr;
-		return (error);
-	}
-
+	bzero((caddr_t)&netaddr, sizeof (netaddr));
+	netaddr.sin_family = AF_INET;
 	/*
 	 * Delete any previous route for an old address.
 	 */
-	bzero((caddr_t)&netaddr, sizeof (netaddr));
-	netaddr.sin_family = AF_INET;
 	if (ia->ia_flags & IFA_ROUTE) {
-		if (ifp->if_flags & IFF_LOOPBACK)
-			rtinit(&oldaddr, &oldaddr, (int)SIOCDELRT, RTF_HOST);
-		else if (ifp->if_flags & IFF_POINTOPOINT)
-			rtinit(&ia->ia_dstaddr, &oldaddr, (int)SIOCDELRT,
-			    RTF_HOST);
-		else {
-			netaddr.sin_addr = in_makeaddr(ia->ia_subnet,
-			    INADDR_ANY);
-			rtinit((struct sockaddr *)&netaddr, &oldaddr, 
-			    (int)SIOCDELRT, 0);
-		}
+		if ((ifp->if_flags & IFF_POINTOPOINT) == 0) {
+		    netaddr.sin_addr = in_makeaddr(ia->ia_subnet, INADDR_ANY);
+		    rtinit((struct sockaddr *)&netaddr, &ia->ia_addr, -1);
+		} else
+		    rtinit((struct sockaddr *)&ia->ia_dstaddr, &ia->ia_addr, -1);
 		ia->ia_flags &= ~IFA_ROUTE;
 	}
+	ia->ia_addr = *(struct sockaddr *)sin;
 	if (IN_CLASSA(i))
 		ia->ia_netmask = IN_CLASSA_NET;
 	else if (IN_CLASSB(i))
@@ -371,24 +365,27 @@ in_ifinit(ifp, ia, sin)
 		ia->ia_broadaddr.sa_family = AF_INET;
 		((struct sockaddr_in *)(&ia->ia_broadaddr))->sin_addr =
 			in_makeaddr(ia->ia_subnet, INADDR_BROADCAST);
-		ia->ia_netbroadcast.s_addr =
-		    htonl(ia->ia_net | (INADDR_BROADCAST &~ ia->ia_netmask));
+	}
+	/*
+	 * Give the interface a chance to initialize
+	 * if this is its first address,
+	 * and to validate the address if necessary.
+	 */
+	if (ifp->if_ioctl && (error = (*ifp->if_ioctl)(ifp, SIOCSIFADDR, ia))) {
+		splx(s);
+		bzero((caddr_t)&ia->ia_addr, sizeof(ia->ia_addr));
+		return (error);
 	}
 	splx(s);
 	/*
 	 * Add route for the network.
 	 */
-	if (ifp->if_flags & IFF_LOOPBACK)
-		rtinit(&ia->ia_addr, &ia->ia_addr, (int)SIOCADDRT,
-		    RTF_HOST|RTF_UP);
-	else if (ifp->if_flags & IFF_POINTOPOINT)
-		rtinit(&ia->ia_dstaddr, &ia->ia_addr, (int)SIOCADDRT,
-		    RTF_HOST|RTF_UP);
-	else {
+	if ((ifp->if_flags & IFF_POINTOPOINT) == 0) {
 		netaddr.sin_addr = in_makeaddr(ia->ia_subnet, INADDR_ANY);
-		rtinit((struct sockaddr *)&netaddr, &ia->ia_addr,
-		    (int)SIOCADDRT, RTF_UP);
-	}
+		rtinit((struct sockaddr *)&netaddr, &ia->ia_addr, RTF_UP);
+	} else
+		rtinit((struct sockaddr *)&ia->ia_dstaddr, &ia->ia_addr,
+			RTF_HOST|RTF_UP);
 	ia->ia_flags |= IFA_ROUTE;
 	return (0);
 }
@@ -427,3 +424,53 @@ in_broadcast(in)
 	return (0);
 }
 #endif
+#if	CS_TTYLOC
+
+/*
+ *  myipaddr - determine my IP address for TTYLOC
+ *
+ *  Return: the 32-bit primary IP address of the system or 0 if no address can
+ *  be determined (e.g. because one has yet to be set).
+ */
+ 
+long
+myipaddr()
+{
+    static struct in_addr myaddr;
+
+    if (myaddr.s_addr == 0)
+    {
+	register struct in_ifaddr *ia;
+        extern struct ifnet loif;
+
+	/*
+	 *  We have no idea whether or not this is the "right" way
+	 *  to accomplish this yet...
+	 */
+	for (ia = in_ifaddr; ia; ia = ia->ia_next)
+	{
+	    register struct ifnet *ifp = ia->ia_ifp;
+
+	    if (ifp != &loif && (ifp->if_flags&IFF_UP))
+	    {
+#define faddr ((char *)&(((struct sockaddr_in *)(&ia->ia_addr))->sin_addr.s_addr))
+#define taddr ((char *)&(myaddr.s_addr))
+		/*
+		 *  TTYLOC standard wants bytes in "numeric" order.
+		 *
+		 *  This needs work to be machine independent.
+		 */
+		taddr[0] = faddr[3];
+		taddr[1] = faddr[2];
+		taddr[2] = faddr[1];
+		taddr[3] = faddr[0];
+		break;
+#undef	faddr
+#undef	taddr
+	    }
+	}
+    }
+    return(myaddr.s_addr);
+}
+
+#endif	CS_TTYLOC

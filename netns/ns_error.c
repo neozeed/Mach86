@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1984, 1985, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ns_error.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ns_error.c	6.5 (Berkeley) 8/9/85
  */
 
 #include "param.h"
@@ -140,6 +167,7 @@ ns_err_input(m)
 	register struct ns_epidp *epidp = mtod(m, struct ns_epidp *);
 	register int i;
 	int type, code, param;
+	extern struct ns_addr if_makeaddr();
 
 	/*
 	 * Locate ns_err structure in mbuf, and check
@@ -233,7 +261,6 @@ free:
 	m_freem(m);
 }
 
-#ifdef notdef
 u_long
 nstime()
 {
@@ -244,7 +271,6 @@ nstime()
 	splx(s);
 	return (htonl(t));
 }
-#endif
 
 ns_echo(idp)
 register struct idp *idp;
@@ -267,9 +293,8 @@ register struct idp *idp;
 
 	if (idp->idp_sum != 0xffff) {
 		idp->idp_sum = 0;
-		idp->idp_sum = ns_cksum(m,
-		    (int)(((ntohs(idp->idp_len) - 1)|1)+1));
+		idp->idp_sum = ns_cksum(m, (((ntohs(idp->idp_len) - 1)|1)+1));
 	}
-	(void) ns_output(m, (struct route *)0, NS_FORWARDING);
+	(void) ns_output(m, 0, NS_FORWARDING);
 	return(0);
 }

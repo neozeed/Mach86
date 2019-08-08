@@ -1,10 +1,72 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)fs.h	7.1 (Berkeley) 6/4/86
+ *	@(#)fs.h	6.5 (Berkeley) 9/11/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 03-Aug-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_RPAUSE:  Added freefrags() and freeinodes() macros and
+ *	FS_FLOWAT, FS_FHIWAT, FS_ILOWAT, FS_IHIWAT, FS_FNOSPC and
+ *	FS_INOSPC definitions.
+ *
+ * 24-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_OLDFS:  fixed freespace macro for old format file systems.
+ *
+ * 12-Jun-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_OLDFS:  Added fs_oldfs pointer to file system structure
+ *	to keep track of old-style super blocks and isoldfs() macro to
+ *	distinguish between old and new file system formats;  modified
+ *	blksize() and dblksize() macros to return constant size blocks
+ *	for old file system;  modified itod() macro to also handle
+ *	old-style file systems and created new itooo() macro to compute
+ *	the inode offset for old-style file systems.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#ifdef	KERNEL
+#include "cs_oldfs.h"
+#include "cs_rpause.h"
+#else	KERNEL
+#include <sys/features.h>
+#endif	KERNEL
+#endif	CMU
 
 /*
  * Each disk drive contains some number of file systems.
@@ -169,7 +231,36 @@ struct	fs
 	long	fs_inopb;		/* value of INOPB */
 	long	fs_nspf;		/* value of NSPF */
 	long	fs_optim;		/* optimization preference, see below */
+#if	CS_OLDFS || CS_RPAUSE
+	/*
+	 *  This entire structure appears on the disk in new file systems
+	 *  and the in-core version is the primary handle which is passed
+	 *  around internally.  We need space for a pointer to the old
+	 *  format super-block for such file systems and this is as good as
+	 *  any.  We could also share space with any field used by the new
+	 *  file system which is not needed in the common path processing
+	 *  code for both file systems but this seems safer.
+	 */
+	union {
+#if	CS_OLDFS
+	    struct filsys
+	          *sufs_oldfs;
+#endif	CS_OLDFS
+	    long   sufs_sparecon[5];	/* reserved for future constants */
+	} fs_spareun;
+#if	CS_OLDFS
+#define	fs_oldfs  fs_spareun.sufs_oldfs		/* old filsys super-block */
+#endif	CS_OLDFS
+#if	CS_RPAUSE
+#define	fs_fhiwat fs_spareun.sufs_sparecon[1]	/* fragment high water mark */
+#define	fs_flowat fs_spareun.sufs_sparecon[2]	/* fragment low water mark */
+#define	fs_ihiwat fs_spareun.sufs_sparecon[3]	/* inode high water mark */
+#define	fs_ilowat fs_spareun.sufs_sparecon[4]	/* inode low water mark */
+#endif	CS_RPAUSE
+#define	fs_sparecon fs_spareun.sufs_sparecon
+#else	CS_OLDFS || CS_RPAUSE
 	long	fs_sparecon[5];		/* reserved for future constants */
+#endif	CS_OLDFS || CS_RPAUSE
 /* sizes determined by number of cylinder groups and their sizes */
 	daddr_t fs_csaddr;		/* blk addr of cyl grp summary area */
 	long	fs_cssize;		/* size of cyl grp summary area */
@@ -287,9 +378,27 @@ struct	cg {
  */
 #define	itoo(fs, x)	((x) % INOPB(fs))
 #define	itog(fs, x)	((x) / (fs)->fs_ipg)
+#if	CS_OLDFS
+/*
+ *  Old-style file system inode number to block offset.  This exists as a
+ *  distinct macro since it is only used when we already know we are delaing
+ *  with an old-style file system.
+ */
+#define	itooo(fs, x)	(((unsigned)(x)-1)%INOPB(fs))
+/*
+ *  Old/New-style file system inode number to file system block address.
+ */
+#define	itod(fs, x)	\
+	(isoldfs(fs)? \
+	    ((daddr_t) ((((unsigned)(x)-1)/INOPB(fs))+2)) \
+	: \
+	    ((daddr_t)(cgimin(fs, itog(fs, x)) + \
+	    (blkstofrags((fs), (((x) % (fs)->fs_ipg) / INOPB(fs)))))))
+#else	CS_OLDFS
 #define	itod(fs, x) \
 	((daddr_t)(cgimin(fs, itog(fs, x)) + \
 	(blkstofrags((fs), (((x) % (fs)->fs_ipg) / INOPB(fs))))))
+#endif	CS_OLDFS
 
 /*
  * Give cylinder group number for a file system block.
@@ -305,9 +414,9 @@ struct	cg {
 #define blkmap(fs, map, loc) \
     (((map)[(loc) / NBBY] >> ((loc) % NBBY)) & (0xff >> (NBBY - (fs)->fs_frag)))
 #define cbtocylno(fs, bno) \
-    ((bno) * NSPF(fs) / (fs)->fs_spc)
+	((bno) * NSPF(fs) / (fs)->fs_spc)
 #define cbtorpos(fs, bno) \
-    ((bno) * NSPF(fs) % (fs)->fs_spc % (fs)->fs_nsect * NRPOS / (fs)->fs_nsect)
+	((bno) * NSPF(fs) % (fs)->fs_nsect * NRPOS / (fs)->fs_nsect)
 
 /*
  * The following macros optimize certain frequently calculated
@@ -335,6 +444,115 @@ struct	cg {
 #define blknum(fs, fsb)		/* calculates rounddown(fsb, fs->fs_frag) */ \
 	((fsb) &~ ((fs)->fs_frag - 1))
 
+#if	CS_RPAUSE
+/* 
+ *  Low fragment/inode space flag bits.
+ */
+#define	FS_FNOSPC	1		/* low on fragments */
+#define	FS_INOSPC	2		/* low on inodes */
+
+/* 
+ *  Free fragment/inode high/low water mark definitions.
+ */
+#define	FS_FLOWAT(fs)	((fs)->fs_flowat)	/* fragment low water */
+#define	FS_FHIWAT(fs)	((fs)->fs_fhiwat)	/* fragment high water */
+#define	FS_ILOWAT(fs)	((fs)->fs_ilowat)	/* inode low water */
+#define	FS_IHIWAT(fs)	((fs)->fs_ihiwat)	/* inode high water */
+
+#if	CS_OLDFS
+/* 
+ * Determine the absolute number of available inodes
+ */
+#define freeinodes(fs)					\
+(							\
+  (							\
+    isoldfs(fs)						\
+  ?							\
+    ((fs)->fs_oldfs->s_tinode)				\
+  :							\
+    ((fs)->fs_cstotal.cs_nifree)			\
+  )							\
+)
+/* 
+ * Determine the absolute number of available frags.
+ */
+#define freefrags(fs)					\
+(							\
+  (							\
+    isoldfs(fs)						\
+  ?							\
+    ((fs)->fs_oldfs->s_tfree)				\
+  :							\
+    (							\
+      blkstofrags((fs), (fs)->fs_cstotal.cs_nbfree)	\
+      +							\
+      (fs)->fs_cstotal.cs_nffree			\
+    )							\
+  )							\
+)
+#else 	CS_OLDFS
+/* 
+ * Determine the absolute number of available inodes
+ */
+#define freeinodes(fs)					\
+(							\
+    ((fs)->fs_cstotal.cs_nifree)			\
+)
+/* 
+ * Determine the absolute number of available frags.
+ */
+#define freefrags(fs)					\
+(							\
+      blkstofrags((fs), (fs)->fs_cstotal.cs_nbfree)	\
+      +							\
+      (fs)->fs_cstotal.cs_nffree			\
+)
+#endif	CS_OLDFS
+#endif	CS_RPAUSE
+#if	CS_OLDFS
+/* 
+ * Determine the number of available frags given a
+ * percentage to hold in reserve
+ */
+#define freespace(fs, percentreserved)			\
+(							\
+  (							\
+    isoldfs(fs)						\
+  ?							\
+    ((fs)->fs_oldfs->s_tfree)				\
+  :							\
+    (							\
+      blkstofrags((fs), (fs)->fs_cstotal.cs_nbfree)	\
+      +							\
+      (fs)->fs_cstotal.cs_nffree			\
+    )							\
+  )							\
+  -							\
+  ((fs)->fs_dsize * (percentreserved) / 100)		\
+)
+
+/* 
+ * Distinguish old format file system from new.  This is the only
+ * way this test should be made within the code.
+ */
+#define	isoldfs(fs)	((fs)->fs_oldfs != 0)
+
+/* 
+ * Determining the size of a file block in the file system.
+ */
+#define blksize(fs, ip, lbn) \
+	((isoldfs(fs) \
+          || \
+	  (lbn) >= NDADDR || (ip)->i_size >= ((lbn) + 1) << (fs)->fs_bshift) \
+	    ? (fs)->fs_bsize \
+	    : (fragroundup(fs, blkoff(fs, (ip)->i_size))))
+#define dblksize(fs, dip, lbn) \
+	((isoldfs(fs) \
+	  || \
+          (lbn) >= NDADDR || (dip)->di_size >= ((lbn) + 1) << (fs)->fs_bshift) \
+	    ? (fs)->fs_bsize \
+	    : (fragroundup(fs, blkoff(fs, (dip)->di_size))))
+#else	CS_OLDFS
 /*
  * Determine the number of available frags given a
  * percentage to hold in reserve
@@ -354,6 +572,7 @@ struct	cg {
 	(((lbn) >= NDADDR || (dip)->di_size >= ((lbn) + 1) << (fs)->fs_bshift) \
 	    ? (fs)->fs_bsize \
 	    : (fragroundup(fs, blkoff(fs, (dip)->di_size))))
+#endif	CS_OLDFS
 
 /*
  * Number of disk sectors per block; assumes DEV_BSIZE byte sector size.

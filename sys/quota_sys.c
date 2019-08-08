@@ -1,10 +1,53 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)quota_sys.c	7.1 (Berkeley) 6/5/86
+ *	@(#)quota_sys.c	6.6 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 05-Aug-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_LINT:  put parameter declarations in setquota() and qquota()
+ *	under QUOTA compilation flag.
+ *	[V1(1)]
+ **********************************************************************
+ */
+ 
+#include "cs_lint.h"
+#endif	CMU
 
 /*
  * MELBOURNE QUOTAS
@@ -27,12 +70,15 @@
  */
 setquota()
 {
+#if	CS_LINT && !defined(QUOTA)
+#else	CS_LINT && !defined(QUOTA)
 	register struct a {
 		char	*fblk;
 		char	*fname;
 	} *uap = (struct a *)u.u_ap;
 	register struct mount *mp;
 	dev_t dev;
+#endif	CS_LINT && !defined(QUOTA)
 
 #ifndef QUOTA
 	u.u_error = EINVAL;
@@ -59,12 +105,15 @@ setquota()
  */
 qquota()
 {
+#if	CS_LINT && !defined(QUOTA)
+#else	CS_LINT && !defined(QUOTA)
 	register struct a {
 		int	cmd;
 		int	uid;
 		int	arg;
 		caddr_t	addr;
 	} *uap = (struct a *)u.u_ap;
+#endif	CS_LINT && !defined(QUOTA)
 	register struct quota *q;
 
 #ifndef QUOTA
@@ -76,7 +125,7 @@ qquota()
 	if (uap->uid != u.u_ruid && uap->uid != u.u_quota->q_uid && !suser())
 		return;
 	if (uap->cmd != Q_SYNC && uap->cmd != Q_SETUID) {
-		q = getquota((uid_t)uap->uid, uap->cmd == Q_DOWARN, 0);
+		q = getquota(uap->uid, uap->cmd == Q_DOWARN, 0);
 		if (q == NOQUOTA) {
 			u.u_error = ESRCH;
 			return;
@@ -111,7 +160,7 @@ qquota()
 		return;
 
 	case Q_SETUID:
-		u.u_error = qsetuid((uid_t)uap->uid, uap->arg);
+		u.u_error = qsetuid(uap->uid, uap->arg);
 		return;
 
 	default:
@@ -341,8 +390,7 @@ qsync(dev)
  * Q_SETUID - change quota to a particular uid.
  */
 qsetuid(uid, noquota)
-	uid_t uid;
-	int noquota;
+	int uid, noquota;
 {
 	register struct quota *q;
 

@@ -1,17 +1,82 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
+ *	@(#)kern_clock.c	6.14 (Berkeley) 9/4/85
+ */
+#if	CMU
+/*
+ **************************************************************************
+ * HISTORY
+ * 22-Mar-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Merged VM and Romp versions.
  *
- *	@(#)kern_clock.c	7.1 (Berkeley) 6/5/86
+ *  6-Mar-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Changed calls to spl7() to be splhigh().
+ *
+ * 13-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Added code from IBM under switch ROMP to make it work on the
+ *	Sailboat.  
+ *
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 23-Oct-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Update for multiprocessor scheduler.
+ *
+ * 11-Oct-85  Robert V Baron (rvb) at Carnegie-Mellon University
+ *	Flush MPS
+ *
+ * 16-Nov-84  Robert V Baron (rvb) at Carnegie-Mellon University
+ *	have the time_keeper machine bump the "tick" time.
+ *
+ **************************************************************************
  */
 
+#include "cs_generic.h"
+#include "mach_acc.h"
+#include "mach_mp.h"
+#include "mach_mpm.h"
+#endif	CMU
+
 #include "../machine/reg.h"
-#include "../machine/psl.h"
+#ifdef	vax
+#include "../vax/psl.h"
+#endif	vax
+#ifdef	romp
+#include "../ca/scr.h"
+#endif	romp
 
 #include "param.h"
 #include "systm.h"
-#include "dk.h"
+#include "../h/dk.h"
 #include "callout.h"
 #include "dir.h"
 #include "user.h"
@@ -20,14 +85,20 @@
 #include "vm.h"
 #include "text.h"
 
-#if defined(vax)
+#ifdef vax
 #include "../vax/mtpr.h"
-#include "../vax/clock.h"
 #endif
 
 #ifdef GPROF
 #include "gprof.h"
 #endif
+
+#if	MACH_MP
+#include "../h/map.h"
+#include "../sync/mp_queue.h"
+#include "../mp/remote_prim.h"
+#include "../machine/cpu.h"
+#endif	MACH_MP
 
 /*
  * Clock handling routines.
@@ -49,10 +120,22 @@
  *	time of day, system/user timing, timeouts, profiling on separate timers
  *	allocate more timeout table slots when table overflows.
  */
-
+#ifdef notdef
 /*
  * Bump a timeval by a small number of usec's.
  */
+bumptime(tp, usec)
+	register struct timeval *tp;
+	int usec;
+{
+
+	tp->tv_usec += usec;
+	if (tp->tv_usec >= 1000000) {
+		tp->tv_usec -= 1000000;
+		tp->tv_sec++;
+	}
+}
+#endif notdef
 #define BUMPTIME(t, usec) { \
 	register struct timeval *tp = (t); \
  \
@@ -70,17 +153,33 @@
  * we run through the statistics gathering routine as well.
  */
 /*ARGSUSED*/
+#ifdef	romp
+hardclock(dev, icscs, iar)
+	register dev_t dev;
+	register int icscs;
+	register int iar;
+#else	romp
 hardclock(pc, ps)
 	caddr_t pc;
 	int ps;
+#endif	romp
 {
 	register struct callout *p1;
 	register struct proc *p;
 	register int s;
 	int needsoft = 0;
-	extern int tickdelta;
-	extern long timedelta;
+	extern int adjtimedelta, tickadj;
 
+#if	MACH_MP
+	if (cpu_number() != master_cpu) {
+#ifdef	romp
+		slave_hardclock(dev,icscs,iar);
+#else	romp
+		slave_hardclock(pc, ps);
+#endif	romp
+		return;
+	}
+#endif	MACH_MP
 	/*
 	 * Update real-time timeout queue.
 	 * At front of queue are some number of events which are ``due''.
@@ -107,7 +206,11 @@ hardclock(pc, ps)
 	 * assuming that the current state has been around at least
 	 * one tick.
 	 */
+#ifdef	romp
+	if (USERMODE(icscs)) {
+#else	romp
 	if (USERMODE(ps)) {
+#endif	romp
 		if (u.u_prof.pr_scale)
 			needsoft = 1;
 		/*
@@ -123,8 +226,17 @@ hardclock(pc, ps)
 		/*
 		 * CPU was in system state.
 		 */
-		if (!noproc)
+#if	MACH_MP
+		/*
+		 * Always charge the tick to someone, this may be the idle
+		 * thread.
+		 */
+		BUMPTIME(&u.u_ru.ru_stime, tick);
+#else	MACH_MP
+		if (! noproc) {
 			BUMPTIME(&u.u_ru.ru_stime, tick);
+		}
+#endif	MACH_MP
 	}
 
 	/*
@@ -147,10 +259,7 @@ hardclock(pc, ps)
 		    itimerdecr(&u.u_timer[ITIMER_PROF], tick) == 0)
 			psignal(u.u_procp, SIGPROF);
 		s = u.u_procp->p_rssize;
-		u.u_ru.ru_idrss += s;
-#ifdef notdef
-		u.u_ru.ru_isrss += 0;		/* XXX (haven't got this) */
-#endif
+		u.u_ru.ru_idrss += s; u.u_ru.ru_isrss += 0;	/* XXX */
 		if (u.u_procp->p_textp) {
 			register int xrss = u.u_procp->p_textp->x_rssize;
 
@@ -186,13 +295,22 @@ hardclock(pc, ps)
 				p->p_pri = p->p_usrpri;
 		}
 	}
+#if	MACH_MP
+	else {		/* charge tick to what must be idle thread */
+		u.u_procp->p_cpticks++;
+	}
+#endif	MACH_MP
 
 	/*
 	 * If the alternate clock has not made itself known then
 	 * we must gather the statistics.
 	 */
 	if (phz == 0)
+#ifdef	romp
+		gatherstats(iar, icscs);
+#else	romp
 		gatherstats(pc, ps);
+#endif	romp
 
 	/*
 	 * Increment the time-of-day, and schedule
@@ -200,28 +318,36 @@ hardclock(pc, ps)
 	 * so we don't keep the relatively high clock interrupt
 	 * priority any longer than necessary.
 	 */
-	if (timedelta == 0)
+	if (adjtimedelta == 0)
 		BUMPTIME(&time, tick)
 	else {
 		register delta;
 
-		if (timedelta < 0) {
-			delta = tick - tickdelta;
-			timedelta += tickdelta;
+		if (adjtimedelta < 0) {
+			delta = tick - tickadj;
+			adjtimedelta += tickadj;
 		} else {
-			delta = tick + tickdelta;
-			timedelta -= tickdelta;
+			delta = tick + tickadj;
+			adjtimedelta -= tickadj;
 		}
 		BUMPTIME(&time, delta);
 	}
 	if (needsoft) {
+#ifdef	romp
+		if (BASEPRI(icscs)) {
+#else	romp
 		if (BASEPRI(ps)) {
+#endif	romp
 			/*
 			 * Save the overhead of a software interrupt;
 			 * it will happen as soon as we return, so do it now.
 			 */
 			(void) splsoftclock();
+#ifdef	romp
+			softclock(iar, icscs);
+#else	romp
 			softclock(pc, ps);
+#endif	romp
 		} else
 			setsoftclock();
 	}
@@ -241,7 +367,7 @@ gatherstats(pc, ps)
 	caddr_t pc;
 	int ps;
 {
-	register int cpstate, s;
+	int cpstate, s;
 
 	/*
 	 * Determine what state the cpu is in.
@@ -282,7 +408,7 @@ gatherstats(pc, ps)
 	 */
 	cp_time[cpstate]++;
 	for (s = 0; s < DK_NDRIVE; s++)
-		if (dk_busy & (1 << s))
+		if (dk_busy&(1<<s))
 			dk_time[s]++;
 }
 
@@ -302,7 +428,11 @@ softclock(pc, ps)
 		register int (*func)();
 		register int a, s;
 
+#if	CS_GENERIC
 		s = splhigh();
+#else	CS_GENERIC
+		s = spl7();
+#endif	CS_GENERIC
 		if ((p1 = calltodo.c_next) == 0 || p1->c_time > 0) {
 			splx(s);
 			break;
@@ -348,7 +478,11 @@ timeout(fun, arg, t)
 	register int t;
 {
 	register struct callout *p1, *p2, *pnew;
+#if	CS_GENERIC
 	register int s = splhigh();
+#else	CS_GENERIC
+	register int s = spl7();
+#endif	CS_GENERIC
 
 	if (t <= 0)
 		t = 1;
@@ -380,7 +514,11 @@ untimeout(fun, arg)
 	register struct callout *p1, *p2;
 	register int s;
 
+#if	CS_GENERIC
 	s = splhigh();
+#else	CS_GENERIC
+	s = spl7();
+#endif	CS_GENERIC
 	for (p1 = &calltodo; (p2 = p1->c_next) != 0; p1 = p2) {
 		if (p2->c_func == fun && p2->c_arg == arg) {
 			if (p2->c_next && p2->c_time > 0)
@@ -404,7 +542,11 @@ hzto(tv)
 {
 	register long ticks;
 	register long sec;
+#if	CS_GENERIC
 	int s = splhigh();
+#else	CS_GENERIC
+	int s = spl7();
+#endif	CS_GENERIC
 
 	/*
 	 * If number of milliseconds will fit in 32 bit arithmetic,
@@ -443,11 +585,9 @@ profil()
 	upp->pr_scale = uap->pcscale;
 }
 
-#ifdef COMPAT
 opause()
 {
 
 	for (;;)
 		sleep((caddr_t)&u, PSLEP);
 }
-#endif

@@ -1,10 +1,55 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)kern_resource.c	7.1 (Berkeley) 6/5/86
+ *	@(#)kern_resource.c	6.7 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 6-Dec-85 David L. Black (dlb) at Carnegie-Mellon University
+ *	Added switch for new timing facility.
+ *
+ * 7-Aug-85 David L. Black (dlb) at Carnegie-Mellon University
+ * 	Modified getrusage to return time from new timing facility
+ *	if called on self.
+ **********************************************************************
+ */
+
+#include "mach_time.h"
+#endif	CMU
 
 #include "param.h"
 #include "systm.h"
@@ -17,6 +62,11 @@
 #include "uio.h"
 #include "vm.h"
 #include "kernel.h"
+
+#if	MACH_TIME > 0
+#include "uproc.h"
+extern int mach_time;
+#endif	MACH_TIME > 0
 
 /*
  * Resource controls and accounting.
@@ -39,7 +89,7 @@ getpriority()
 		else
 			p = pfind(uap->who);
 		if (p == 0)
-			break;
+			return;
 		low = p->p_nice;
 		break;
 
@@ -92,7 +142,7 @@ setpriority()
 		else
 			p = pfind(uap->who);
 		if (p == 0)
-			break;
+			return;
 		donice(p, uap->prio);
 		found++;
 		break;
@@ -155,7 +205,11 @@ setrlimit()
 	} *uap = (struct a *)u.u_ap;
 	struct rlimit alim;
 	register struct rlimit *alimp;
-	extern unsigned maxdmap;
+#if	MACH_VM
+	int maxdmap = 32*1024*1024;	/* XXX */
+#else	MACH_VM
+	extern int maxdmap;
+#endif	MACH_VM
 
 	if (uap->which >= RLIM_NLIMITS) {
 		u.u_error = EINVAL;
@@ -216,6 +270,10 @@ getrusage()
 	switch (uap->who) {
 
 	case RUSAGE_SELF:
+#if	MACH_TIME
+		if (mach_time == 1)
+		u.u_ru.ru_utime = uproc[ u.u_procp-proc ].up_utime.tr_elapsed;
+#endif	MACH_TIME
 		rup = &u.u_ru;
 		break;
 

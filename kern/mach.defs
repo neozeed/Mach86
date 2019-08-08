@@ -1,0 +1,248 @@
+subsystem Mach 1000;
+{
+/*
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Abstract:
+ *   Matchmaker definitions file for Mach kernel interface.
+ *
+ * HISTORY
+ * 21-May-86  Michael Young (mwyoung) at Carnegie-Mellon University
+ *	Removed backlog argument from port_allocate.
+ *
+ * 20-May-86  Michael Young (mwyoung) at Carnegie-Mellon University
+ *	Added task_ports.
+ *	
+ *	Altered task_ and thread_ status routines to return components,
+ *	rather than all items rolled into one.  Made routines to change
+ *	those components as appropriate.
+ *
+ *  16-May-86 Michael Young (mwyoung) at Carnegie-Mellon University
+ *	Altered port_* routines to not pass receive rights around;
+ *	in fact, most of these routines (e.g. port_disable) really
+ *	shouldn't need a port, but just the port identifier in the
+ *	task being modified.
+ *	
+ *	Added vm_allocate_with_pager entry, mostly to hold a place.
+ *
+ *  01-May-86 Michael Young (mwyoung) at Carnegie-Mellon University
+ *	Started for Mach.
+ */
+}
+
+type int = (TypeInt32, 32);
+
+type kern_return_t = int;
+
+type port_t = (TypePt, 32);
+type boolean_t = (TypeBoolean, 16);
+type port_array_t = ^array[] of (TypePt, 32);
+type task_t = port_t>convert_port_to_task<convert_task_to_port:task_t;
+type thread_t = port_t>convert_port_to_thread<convert_thread_to_port:thread_t;
+type thread_status_t = int;
+type task_status_t = int;
+type thread_array_t = ^array[] of thread_t;
+
+type vm_task_t = port_t>convert_port_to_map<NEVER_HAPPENS:vm_map_t;
+type vm_address_t = int;
+type vm_offset_t = int;
+type vm_size_t = int;
+type vm_prot_t = int;
+type vm_inherit_t = int;
+type vm_region_t = int;
+type vm_region_array_t = ^array[] of vm_region_t;
+type vm_statistics_data_t = array[13] of int;
+type vm_pager_t = port_t;
+type vm_pager_id_t = int;
+
+type pointer_t = ^array [] of (TypeInt8, 8);
+
+simports mach_if from mach_if;
+simports accent from accent;
+uimports mach_types from mach_types;
+
+function port_allocate(
+		target_task	: task_t;
+	out	my_port		: port_t) : kern_return_t;
+	   
+function port_deallocate(
+		target_task	: task_t;
+		my_port		: port_t;
+		reason		: int) : kern_return_t;
+
+function port_enable(
+		target_task	: task_t;
+		my_port		: port_t) : kern_return_t;
+
+function port_disable(
+		target_task	: task_t;
+		my_port		: port_t) : kern_return_t;
+
+function port_select(
+		target_task	: task_t;
+	out	port_list	: port_array_t) : kern_return_t;
+	
+function port_set_backlog(
+		target_task	: task_t;
+		my_port		: port_t;
+		backlog		: int) : kern_return_t;
+
+function port_status(
+		target_task	: task_t;
+		my_port		: port_t;
+	out	enabled		: boolean_t;
+	out	num_msgs	: int;
+	out	backlog		: int) : kern_return_t;
+		
+function task_create(
+		target_task	: task_t;
+		inherit_memory	: boolean_t;
+	out	child_task	: task_t;
+	out	child_data	: port_t) : kern_return_t;
+
+function task_terminate(
+		target_task	: task_t;
+		reason		: int) : kern_return_t;
+
+function task_suspend(
+		target_task	: task_t) : kern_return_t;
+			
+function task_resume(
+		target_task	: task_t) : kern_return_t;
+
+function task_threads(
+		target_task	: task_t;
+	out	thread_list	: thread_array_t) : kern_return_t;
+
+function task_ports(
+		target_task	: task_t;
+	out	port_list	: port_array_t) : kern_return_t;
+
+function task_status(
+		target_task	: task_t;
+	out	notify_port	: port_t;
+	out	resumed		: boolean_t) : kern_return_t;
+
+function task_set_notify(
+		target_task	: task_t;
+		notify_port	: port_t) : kern_return_t;
+			
+function thread_create(
+		parent_task	: task_t;
+	out	child_thread	: thread_t;
+	out	child_data	: port_t) : kern_return_t;
+
+function thread_terminate(
+		target_thread	: thread_t) : kern_return_t;
+
+function thread_suspend(
+		target_thread	: thread_t) : kern_return_t;
+			
+function thread_resume(
+		target_thread	: thread_t) : kern_return_t;
+
+function thread_status(
+		target_thread	: thread_t;
+	out	resumed		: boolean_t;
+	out	old_state	: thread_status_t) : kern_return_t;
+	
+function thread_mutate(
+		target_thread	: thread_t;
+		new_state	: thread_status_t) : kern_return_t;
+
+function vm_allocate(
+		target_task	: vm_task_t;
+	inout	address		: vm_address_t;
+		size		: vm_size_t;
+		anywhere	: boolean_t) : kern_return_t;
+
+function vm_allocate_with_pager(
+		target_task	: vm_task_t;
+	inout	address		: vm_address_t;
+		size		: vm_size_t;
+		anywhere	: boolean_t;
+		pager_port	: port_t;
+		pager_space	: vm_pager_id_t;
+		pager_offset	: vm_offset_t) : kern_return_t;
+		
+function vm_deallocate(
+		target_task	: vm_task_t;
+		address		: vm_address_t;
+		size		: vm_size_t) : kern_return_t;
+
+function vm_protect(
+		target_task	: vm_task_t;
+		address		: vm_address_t;
+		size		: vm_size_t;
+		set_maximum	: boolean_t;
+		new_protection	: vm_prot_t) : kern_return_t;
+
+function vm_inherit(
+		target_task	: vm_task_t;
+		address		: vm_address_t;
+		size		: vm_size_t;
+		new_inheritance	: vm_inherit_t) : kern_return_t;
+
+function vm_read(
+		target_task	: vm_task_t;
+		address		: vm_address_t;
+		size		: vm_size_t;
+	out	data		: pointer_t) : kern_return_t;
+
+function vm_write(
+		target_task	: vm_task_t;
+		address		: vm_address_t;
+		data		: pointer_t) : kern_return_t;
+
+function vm_copy(
+		target_task	: vm_task_t;
+		source_address	: vm_address_t;
+		size		: vm_size_t;
+		dest_address	: vm_address_t) : kern_return_t;
+
+function vm_regions(
+		target_task	: vm_task_t;
+		start		: vm_address_t;
+		size		: vm_size_t;
+	out	regions		: vm_region_array_t) : kern_return_t;
+
+function vm_statistics(
+		target_task	: vm_task_t;
+	out	vm_stats	: vm_statistics_data_t) : kern_return_t;
+
+function pager_clean(
+		request_port	: port_t;
+		pager_space	: vm_pager_id_t;
+		offset		: vm_offset_t;
+		size		: vm_size_t) : kern_return_t;
+
+function pager_fetch(
+		request_port	: port_t;
+		pager_space	: vm_pager_id_t;
+		offset		: vm_offset_t;
+		size		: vm_size_t) : kern_return_t;

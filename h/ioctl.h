@@ -1,10 +1,79 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ioctl.h	7.1 (Berkeley) 6/4/86
+ *	@(#)ioctl.h	6.14 (Berkeley) 8/25/85
  */
+#if	CMU
+/* 
+ **********************************************************************
+ * HISTORY
+ * 22-Feb-86  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_TTY:  Fix incorrect read/write sense in TIOCCSET,
+ *	TIOCCLOG, TIOCCHECK, and TIOCATTACH definitions.
+ *
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 29-Jan-86  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT:  Added FIOCDIROK for directory read logging.
+ *
+ * 10-Jul-85  Robert V Baron (rvb) at Carnegie-Mellon University
+ *	CS_SOCKET:  Added SIOCBROAD to enable udp broadcast.
+ *
+ * 09-May-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	Upgraded from 4.1BSD.  Carried over changes below.
+ *	CS_XMOD:  Retained FIOCXMOD, FIOCFCNT and FIOCXNOF for now;
+ *	CS_TTY:  Added new TIOCCSET call and CDETHUP and CBRKINH
+ *	mode bits; added new TIOCCLOG, TIOCCHECK and TIOCATTACH calls;
+ *	CS_GENERIC:  Fixed to include sgtty.h from kernel area.
+ *	[V1(1)]
+ *
+ * 28-Mar-83  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_TTYLOC:  Added TIOCGLOC definition (V3.06h).
+ *
+ **********************************************************************
+ */
+ 
+#ifdef	KERNEL
+#include "cs_compat.h"
+#include "cs_generic.h"
+#include "cs_socket.h"
+#include "cs_tty.h"
+#include "cs_ttyloc.h"
+#include "cs_xmod.h"
+#else	KERNEL
+#include <sys/features.h>
+#endif	KERNEL
+#endif	CMU
 
 /*
  * Ioctl definitions
@@ -14,9 +83,15 @@
 #ifdef KERNEL
 #include "ttychars.h"
 #include "ttydev.h"
+#if	CS_TTYLOC
+#include "../h/ttyloc.h"
+#endif	CS_TTYLOC
 #else
 #include <sys/ttychars.h>
 #include <sys/ttydev.h>
+#if	CS_TTYLOC
+#include <sys/ttyloc.h>
+#endif	CS_TTYLOC
 #endif
 
 struct tchars {
@@ -52,31 +127,12 @@ struct sgttyb {
 #endif
 
 /*
- * Window/terminal size structure.
- * This information is stored by the kernel
- * in order to provide a consistent interface,
- * but is not used by the kernel.
- *
- * Type must be "unsigned short" so that types.h not required.
+ * Window size structure
  */
 struct winsize {
-	unsigned short	ws_row;			/* rows, in characters */
-	unsigned short	ws_col;			/* columns, in characters */
-	unsigned short	ws_xpixel;		/* horizontal size, pixels */
-	unsigned short	ws_ypixel;		/* vertical size, pixels */
+	unsigned short	ws_row, ws_col;		/* character size of window */
+	unsigned short	ws_xpixel, ws_ypixel;	/* pixel size of window */
 };
-
-/*
- * Pun for SUN.
- */
-struct ttysize {
-	unsigned short	ts_lines;
-	unsigned short	ts_cols;
-	unsigned short	ts_xxx;
-	unsigned short	ts_yyy;
-};
-#define	TIOCGSIZE	TIOCGWINSZ
-#define	TIOCSSIZE	TIOCSWINSZ
 
 #ifndef _IO
 /*
@@ -156,7 +212,7 @@ struct ttysize {
 #define		BSDELAY		0x00008000	/* \b delay */
 #define			BS0	0x00000000
 #define			BS1	0x00008000
-#define		ALLDELAY	(NLDELAY|TBDELAY|CRDELAY|VTDELAY|BSDELAY)
+#define 	ALLDELAY	(NLDELAY|TBDELAY|CRDELAY|VTDELAY|BSDELAY)
 #define		CRTBS		0x00010000	/* do backspacing for crt */
 #define		PRTERA		0x00020000	/* \ ... / erase */
 #define		CRTERA		0x00040000	/* " \b " to wipe out char */
@@ -174,6 +230,17 @@ struct ttysize {
 #define		DECCTQ		0x40000000	/* only ^Q starts after ^S */
 #define		NOFLSH		0x80000000	/* no output flush on signal */
 /* locals, from 127 down */
+#if	CS_TTYLOC
+#define	TIOCGLOC	_IOR (t, 255, struct ttyloc) /* get terminal location */
+#endif	CS_TTYLOC
+#if	CS_TTY
+#define	TIOCCSET	_IOW (t, 254, int)
+#define		CDETHUP	0000001
+#define		CBRKINH	0000002
+#define	TIOCCLOG	_IOW (t, 253, int)
+#define	TIOCCHECK	_IOW (t, 252, int)
+#define	TIOCATTACH	_IOW (t, 251, int)
+#endif	CS_TTY
 #define	TIOCLBIS	_IOW(t, 127, int)	/* bis local mode bits */
 #define	TIOCLBIC	_IOW(t, 126, int)	/* bic local mode bits */
 #define	TIOCLSET	_IOW(t, 125, int)	/* set entire local mode word */
@@ -219,19 +286,39 @@ struct ttysize {
 #define	TIOCMBIC	_IOW(t, 107, int)	/* bic modem bits */
 #define	TIOCMGET	_IOR(t, 106, int)	/* get all modem bits */
 #define	TIOCREMOTE	_IOW(t, 105, int)	/* remote input editing */
-#define	TIOCGWINSZ	_IOR(t, 104, struct winsize)	/* get window size */
-#define	TIOCSWINSZ	_IOW(t, 103, struct winsize)	/* set window size */
-#define	TIOCUCNTL	_IOW(t, 102, int)	/* pty: set/clr usr cntl mode */
-#define		UIOCCMD(n)	_IO(u, n)		/* usr cntl op "n" */
+#define TIOCGWINSZ	_IOR(t, 104, struct winsize)	/* get window size */
+#define TIOCSWINSZ	_IOW(t, 103, struct winsize)	/* set window size */
+#define TIOCUCNTL	_IOW(t, 102, int)	/* pty: set/clr usr cntl mode */
 
 #define	OTTYDISC	0		/* old, v7 std tty driver */
 #define	NETLDISC	1		/* line discip for berk net */
 #define	NTTYDISC	2		/* new tty discipline */
-#define	TABLDISC	3		/* tablet discipline */
-#define	SLIPDISC	4		/* serial IP discipline */
+#define	TABLDISC	3		/* hitachi tablet discipline */
+#define	NTABLDISC	4		/* gtco tablet discipline */
 
 #define	FIOCLEX		_IO(f, 1)		/* set exclusive use on fd */
 #define	FIONCLEX	_IO(f, 2)		/* remove exclusive use */
+#if	CS_XMOD
+/*
+ *  Open file count structure returned by FIOCFCNT.
+ */ 
+struct fcnt
+{
+	int	fc_read;	/* times open for reading only */
+	int	fc_write;	/* times open for writing only */
+	int	fc_upd;		/* times open for both reading and writing */
+};
+#define	FIOCXMOD	_IOW(f, 100, int)	/* set exclusive mode */
+#define	FIOCFCNT	_IOR(f, 101, struct fcnt)/* get file counts */
+#define	FIOCXNOF	_IO(f,  103)		/* extend file descriptors */
+
+#define	FXMNONE		0
+#define	FXMWRITE	1
+#define	FXMUPD		2
+#endif	CS_XMOD
+#if	CS_COMPAT
+#define	FIOCDIROK	_IOW(f, 104, int)
+#endif	CS_COMPAT
 /* another local */
 #define	FIONREAD	_IOR(f, 127, int)	/* get # bytes to read */
 #define	FIONBIO		_IOW(f, 126, int)	/* set/clear non-blocking i/o */
@@ -260,13 +347,35 @@ struct ttysize {
 #define	SIOCGIFBRDADDR	_IOWR(i,18, struct ifreq)	/* get broadcast addr */
 #define	SIOCSIFBRDADDR	_IOW(i,19, struct ifreq)	/* set broadcast addr */
 #define	SIOCGIFCONF	_IOWR(i,20, struct ifconf)	/* get ifnet list */
+#if	CS_SOCKET
+#define SIOCBROAD	_IO(s, 255)			/* enable broadcast */
+#endif	CS_SOCKET
 #define	SIOCGIFNETMASK	_IOWR(i,21, struct ifreq)	/* get net addr mask */
 #define	SIOCSIFNETMASK	_IOW(i,22, struct ifreq)	/* set net addr mask */
-#define	SIOCGIFMETRIC	_IOWR(i,23, struct ifreq)	/* get IF metric */
-#define	SIOCSIFMETRIC	_IOW(i,24, struct ifreq)	/* set IF metric */
 
 #define	SIOCSARP	_IOW(i, 30, struct arpreq)	/* set arp entry */
 #define	SIOCGARP	_IOWR(i,31, struct arpreq)	/* get arp entry */
 #define	SIOCDARP	_IOW(i, 32, struct arpreq)	/* delete arp entry */
 
+/* protocol i/o controls (bbn) */
+#define SIOCSPUSH	_IO(b, 64)		/* tcp: set push */
+#define SIOCCPUSH	_IO(b, 65)		/* tcp: clear push */
+#define SIOCSNOACT	_IOW(b, 66, u_long)	/* tcp: set no activity timer */
+#define SIOCGNOACT	_IOR(b, 67, u_long)	/* tcp: get no activity timer */
+#define	    TCP_NOACTPROBE	0x80000000	/*	send pkt on timeout */
+#define	    TCP_NOACTSIG	0x40000000	/*	advise user on timeout */
+#define SIOCSINIT	_IOW(b, 68, int)	/* tcp: set init timer */
+#define SIOCGINIT	_IOR(b, 69, int)	/* tcp: get init timer */
+#define SIOCABORT	_IO(b, 70)		/* tcp: abort connection */
+
+#define SIOCSNDGRAMS	_IOW(b, 71, int)	/* rdp: set max #dgrams rcv */
+#define SIOCGNDGRAMS	_IOR(b, 72, int)	/* rdp: get max #dgrams rcv */
+#define SIOCSSEQ	_IOW(b, 73, int)	/* rdp: set seq delivery */
+#define SIOCGSEQ	_IOR(b, 74, int)	/* rdp: get seq delivery */
+#define SIOCSNULL	_IOW(b, 77, int)	/* rdp: ~set KEEPALIVE timer */
+#define SIOCGNULL	_IOR(b, 78, int)	/* rdp: ~get KEEPALIVE timer */
+
+		/* tcp + rdp */
+#define SIOCSRTTL	_IOW(b, 75, int)	/* set rxmit took too long */
+#define SIOCGRTTL	_IOR(b, 76, int)	/* get rxmit took too long */
 #endif

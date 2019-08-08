@@ -1,10 +1,46 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)mba.c	7.1 (Berkeley) 6/5/86
+ *	@(#)mba.c	6.5 (Berkeley) 9/16/85
  */
+#if	CMU
+/*
+ * HISTORY:
+ * 25-Feb-86  David Golub (dbg) at Carnegie-Mellon University
+ *	Converted to new virtual memory code.
+ *
+ */
+#include "mach_vm.h"
+#endif	CMU
 
 #include "mba.h"
 #if NMBA > 0
@@ -27,6 +63,11 @@
 
 #include "mbareg.h"
 #include "mbavar.h"
+
+#if	MACH_VM
+#include "../vm/pmap.h"
+#include "../h/thread.h"
+#endif	MACH_VM
 
 /* mbunit should be the same as hpunit, etc.! */
 #define mbunit(dev)	(minor(dev) >> 3)
@@ -55,6 +96,20 @@ loop:
 	bp = mi->mi_tab.b_actf;
 	if (bp == NULL)
 		return;
+	/*
+	 * Make sure the drive is still there before starting it up.
+	 */
+	if ((mi->mi_drv->mbd_dt & MBDT_TYPE) == 0) {
+		printf("%s%d: nonexistent\n", mi->mi_driver->md_dname,
+		    mbunit(bp->b_dev));
+		mi->mi_alive = 0;
+		mi->mi_tab.b_actf = bp->av_forw;
+		mi->mi_tab.b_active = 0;
+		mi->mi_tab.b_errcnt = 0;
+		bp->b_flags |= B_ERROR;
+		iodone(bp);
+		goto loop;
+	}
 	/*
 	 * Let the drivers unit start routine have at it
 	 * and then process the request further, per its instructions.
@@ -172,8 +227,11 @@ loop:
 	 * on disks).
 	 */
 	mhp->mh_active = 1;
-	if (mi->mi_driver->md_start == (int (*)())0 ||
-	    (com = (*mi->mi_driver->md_start)(mi)) == 0)
+	if (mi->mi_driver->md_start) {
+		if ((com = (*mi->mi_driver->md_start)(mi)) == 0)
+			com = (bp->b_flags & B_READ) ?
+			    MB_RCOM|MB_GO : MB_WCOM|MB_GO;
+	} else
 		com = (bp->b_flags & B_READ) ? MB_RCOM|MB_GO : MB_WCOM|MB_GO;
 
 	/*
@@ -183,11 +241,11 @@ loop:
 	mbp = mi->mi_mba;
 	mbp->mba_sr = -1;	/* conservative */
 	if (bp->b_bcount >= 0) {
-		mbp->mba_var = mbasetup(mi) + mi->mi_tab.b_bdone;
-		mbp->mba_bcr = -(bp->b_bcount - mi->mi_tab.b_bdone);
+		mbp->mba_var = mbasetup(mi);
+		mbp->mba_bcr = -bp->b_bcount;
 	} else {
-		mbp->mba_var = mbasetup(mi) - bp->b_bcount - mi->mi_tab.b_bdone - 1;
-		mbp->mba_bcr = bp->b_bcount + mi->mi_tab.b_bdone;
+		mbp->mba_var = mbasetup(mi) - bp->b_bcount - 1;
+		mbp->mba_bcr = bp->b_bcount;
 	}
 	mi->mi_drv->mbd_cs1 = com;
 	if (mi->mi_dk >= 0) {
@@ -272,16 +330,7 @@ mbintr(mbanum)
 				mbustart(mi);
 			break;
 
-		case MBD_REPOSITION:	/* driver started repositioning */
-			/*
-			 * Drive is repositioning, not doing data transfer.
-			 * Free controller, but don't have to restart drive.
-			 */
-			mhp->mh_active = 0;
-			mhp->mh_actf = mi->mi_forw;
-			break;
-
-		case MBD_RESTARTED:	/* driver restarted op (ecc, e.g.) */
+		case MBD_RESTARTED:	/* driver restarted op (ecc, e.g.)
 			/*
 			 * Note that mhp->mh_active is still on.
 			 */
@@ -295,7 +344,7 @@ mbintr(mbanum)
 	 * Service drives which require attention
 	 * after non-data-transfer operations.
 	 */
-	while (drive = ffs((long)as)) {
+	while (drive = ffs(as)) {
 		drive--;		/* was 1 origin */
 		as &= ~(1 << drive);
 		mi = mhp->mh_mbip[drive];
@@ -404,11 +453,24 @@ mbasetup(mi)
 	struct proc *rp;
 
 	v = btop(bp->b_un.b_addr);
-	o = (int)(bp->b_un.b_addr) & PGOFSET;
+	o = (int)bp->b_un.b_addr & PGOFSET;
 	if (bp->b_bcount >= 0)
 		npf = btoc(bp->b_bcount + o);
 	else
 		npf = btoc(-(bp->b_bcount) + o);
+#if	MACH_VM
+	{
+		vm_offset_t	addr;
+		pmap_t		map;
+
+		addr = (vm_offset_t)bp->b_un.b_addr;
+		if ((bp->b_flags & B_PHYS) && ((addr & 0x80000000) == 0))
+			map = vm_map_pmap(task_table[bp->b_proc-proc]->map);
+		else
+			map = pmap_kernel();
+		pte = (struct pte *) pmap_pte(map, addr);
+	}
+#else	MACH_VM
 	rp = bp->b_flags&B_DIRTY ? &proc[2] : bp->b_proc;
 	if ((bp->b_flags & B_PHYS) == 0)
 		pte = &Sysmap[btop(((int)bp->b_un.b_addr)&0x7fffffff)];
@@ -418,6 +480,7 @@ mbasetup(mi)
 		pte = &Usrptmap[btokmx((struct pte *)bp->b_un.b_addr)];
 	else
 		pte = vtopte(rp, v);
+#endif	MACH_VM
 	io = mbap->mba_map;
 	while (--npf >= 0) {
 		if (pte->pg_pfnum == 0)

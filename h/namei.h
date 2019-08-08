@@ -1,10 +1,56 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)namei.h	7.1 (Berkeley) 6/4/86
+ *	@(#)namei.h	6.10 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 24-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Updraged to 4.3.
+ *
+ * 20-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_RFS:  Added OKREMOTE flag defintion.
+ *	[V1(1)]
+ **********************************************************************
+ */
+ 
+#ifdef	KERNEL
+#include "cs_rfs.h"
+#else	KERNEL
+#include <sys/features.h>
+#endif	KERNEL
+#endif	CMU
 
 #ifndef _NAMEI_
 #define	_NAMEI_
@@ -40,7 +86,7 @@ struct nameidata {
 #define	ni_resid	ni_uio.uio_resid
 
 /*
- * namei operations and modifiers
+ * namei opertions
  */
 #define	LOOKUP		0	/* perform name lookup only */
 #define	CREATE		1	/* setup for file creation */
@@ -49,16 +95,31 @@ struct nameidata {
 #define NOCACHE		0x20	/* name must not be left in cache */
 #define FOLLOW		0x40	/* follow symbolic links */
 #define	NOFOLLOW	0x0	/* don't follow symbolic links (pseudo) */
+#if	CS_RFS
+#define	OKREMOTE	0x80	/* allow remote name */
+
+/*
+ *  Default namei() defintion for routines which do not wish to
+ *  handle remote names.
+ */
+
+#define	namei	cnamei
+
+/*
+ *  Cover namei() definition to allow remote name processing.
+ */
+#define	rnamei(ndp)	\
+	cnamei(((ndp->ni_nameiop |= OKREMOTE), ndp))
+
+#endif	CS_RFS
 
 /*
  * This structure describes the elements in the cache of recent
  * names looked up by namei.
  */
-struct	namecache {
-	struct	namecache *nc_forw;	/* hash chain, MUST BE FIRST */
-	struct	namecache *nc_back;	/* hash chain, MUST BE FIRST */
-	struct	namecache *nc_nxt;	/* LRU chain */
-	struct	namecache **nc_prev;	/* LRU chain */
+struct	nch {
+	struct	nch *nc_forw, *nc_back;	/* hash chain, MUST BE FIRST */
+	struct	nch *nc_nxt, **nc_prev;	/* LRU chain */
 	struct	inode *nc_ip;		/* inode the name refers to */
 	ino_t	nc_ino;			/* ino of parent of name */
 	dev_t	nc_dev;			/* dev of parent of name */
@@ -68,10 +129,8 @@ struct	namecache {
 #define	NCHNAMLEN	15	/* maximum name segment length we bother with */
 	char	nc_name[NCHNAMLEN];	/* segment name */
 };
-#ifdef KERNEL
-struct	namecache *namecache;
+struct	nch *nch;
 int	nchsize;
-#endif
 
 /*
  * Stats on usefulness of namei caches.

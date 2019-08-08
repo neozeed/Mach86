@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)quota_ufs.c	7.1 (Berkeley) 6/5/86
+ *	@(#)quota_ufs.c	6.4 (Berkeley) 6/8/85
  */
 
 #ifdef QUOTA
@@ -90,19 +117,6 @@ chkdq(ip, change, force)
 	if (dq->dq_bsoftlimit == 0)
 		return (0);
 	dq->dq_flags |= DQ_MOD;
-	/*
-	 * reset warnings if below disk quota.
-	 */
-        if (dq->dq_bwarn == 0 && dq->dq_bsoftlimit &&
-	    (dq->dq_curblocks + change) < dq->dq_bsoftlimit) {
-		dq->dq_bwarn = MAX_DQ_WARN;
-		if (dq->dq_own == u.u_quota) {
-			uprintf("\nUNDER DISC QUOTA: (%s) by %d Kbytes\n",
-				ip->i_fs->fs_fsmnt,
-				dbtob(dq->dq_bsoftlimit -
-				(dq->dq_curblocks + change)) / 1024);
-		}
-	}
 	if (change < 0) {
 		if ((int)dq->dq_curblocks + change >= 0)
 			dq->dq_curblocks += change;
@@ -158,9 +172,8 @@ chkdq(ip, change, force)
  */
 chkiq(dev, ip, uid, force)
 	dev_t dev;
-	uid_t uid;
 	register struct inode *ip;
-	int force;
+	int uid, force;
 {
 	register struct dquot *dq;
 	register struct quota *q;

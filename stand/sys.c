@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)sys.c	7.1 (Berkeley) 6/5/86
+ *	@(#)sys.c	6.3 (Berkeley) 6/8/85
  */
 
 #include "../h/param.h"
@@ -50,10 +77,12 @@ find(path, file)
 		return (0);
 	}
 
+printf("find with path %s\n", path);
 	if (openi((ino_t) ROOTINO, file) < 0) {
 		printf("can't read root inode\n");
 		return (0);
 	}
+printf("root opened\n");
 	while (*path) {
 		while (*path == '/')
 			path++;
@@ -62,7 +91,6 @@ find(path, file)
 			q++;
 		c = *q;
 		*q = '\0';
-		if (q == path) path = "." ;	/* "/" means "/." */
 
 		if ((n = dlook(path, file)) != 0) {
 			if (c == '\0')
@@ -73,7 +101,7 @@ find(path, file)
 			path = q;
 			continue;
 		} else {
-			printf("%s: not found\n", path);
+			printf("%s not found\n", path);
 			return (0);
 		}
 	}
@@ -172,11 +200,10 @@ dlook(s, io)
 	ip = &io->i_ino;
 	if ((ip->i_mode&IFMT) != IFDIR) {
 		printf("not a directory\n");
-		printf("%s: not a directory\n", s);
 		return (0);
 	}
 	if (ip->i_size == 0) {
-		printf("%s: zero length directory\n", s);
+		printf("zero length directory\n");
 		return (0);
 	}
 	len = strlen(s);
@@ -218,8 +245,7 @@ readdir(dirp)
 			io->i_cc = blksize(&io->i_fs, &io->i_ino, lbn);
 			if (devread(io) < 0) {
 				errno = io->i_error;
-				printf("bn %D: directory read error\n",
-					io->i_bn);
+				printf("bn %D: read error\n", io->i_bn);
 				return (NULL);
 			}
 		}
@@ -237,13 +263,11 @@ lseek(fdesc, addr, ptr)
 {
 	register struct iob *io;
 
-#ifndef	SMALL
 	if (ptr != 0) {
 		printf("Seek not from beginning of file\n");
 		errno = EOFFSET;
 		return (-1);
 	}
-#endif SMALL
 	fdesc -= 3;
 	if (fdesc < 0 || fdesc >= NFILES ||
 	    ((io = &iob[fdesc])->i_flgs & F_ALLOC) == 0) {
@@ -309,16 +333,35 @@ getc(fdesc)
 	return (c);
 }
 
+/* does this port?
+getw(fdesc)
+	int fdesc;
+{
+	register w,i;
+	register char *cp;
+	int val;
+
+	for (i = 0, val = 0, cp = &val; i < sizeof(val); i++) {
+		w = getc(fdesc);
+		if (w < 0) {
+			if (i == 0)
+				return (-1);
+			else
+				return (val);
+		}
+		*cp++ = w;
+	}
+	return (val);
+}
+*/
 int	errno;
 
 read(fdesc, buf, count)
 	int fdesc, count;
 	char *buf;
 {
-	register i, size;
+	register i;
 	register struct iob *file;
-	register struct fs *fs;
-	int lbn, off;
 
 	errno = 0;
 	if (fdesc >= 0 & fdesc <= 2) {
@@ -338,7 +381,6 @@ read(fdesc, buf, count)
 		errno = EBADF;
 		return (-1);
 	}
-#ifndef	SMALL
 	if ((file->i_flgs & F_FILE) == 0) {
 		file->i_cc = count;
 		file->i_ma = buf;
@@ -348,48 +390,18 @@ read(fdesc, buf, count)
 		if (i < 0)
 			errno = file->i_error;
 		return (i);
+	} else {
+		if (file->i_offset+count > file->i_ino.i_size)
+			count = file->i_ino.i_size - file->i_offset;
+		if ((i = count) <= 0)
+			return (0);
+		do {
+			*buf++ = getc(fdesc+3);
+		} while (--i);
+		return (count);
 	}
-#endif SMALL
-	if (file->i_offset+count > file->i_ino.i_size)
-		count = file->i_ino.i_size - file->i_offset;
-	if ((i = count) <= 0)
-		return (0);
-	/*
-	 * While reading full blocks, do I/O into user buffer.
-	 * Anything else uses getc().
-	 */
-	fs = &file->i_fs;
-	while (i) {
-		off = blkoff(fs, file->i_offset);
-		lbn = lblkno(fs, file->i_offset);
-		size = blksize(fs, &file->i_ino, lbn);
-		if (off == 0 && size <= i) {
-			file->i_bn = fsbtodb(fs, sbmap(file, lbn)) +
-			    file->i_boff;
-			file->i_cc = size;
-			file->i_ma = buf;
-			if (devread(file) < 0) {
-				errno = file->i_error;
-				return (-1);
-			}
-			file->i_offset += size;
-			file->i_cc = 0;
-			buf += size;
-			i -= size;
-		} else {
-			size -= off;
-			if (size > i)
-				size = i;
-			i -= size;
-			do {
-				*buf++ = getc(fdesc+3);
-			} while (--size);
-		}
-	}
-	return (count);
 }
 
-#ifndef	SMALL
 write(fdesc, buf, count)
 	int fdesc, count;
 	char *buf;
@@ -423,13 +435,8 @@ write(fdesc, buf, count)
 		errno = file->i_error;
 	return (i);
 }
-#endif SMALL
 
 int	openfirst = 1;
-#ifdef notyet
-int	opendev;	/* last device opened; for boot to set bootdev */
-extern	int bootdev;
-#endif notyet
 
 open(str, how)
 	char *str;
@@ -455,66 +462,6 @@ open(str, how)
 gotfile:
 	(file = &iob[fdesc])->i_flgs |= F_ALLOC;
 
-#ifdef notyet
-	for (cp = str; *cp && *cp != '/' && *cp != ':'; cp++)
-			;
-	if (*cp != ':') {
-		/* default bootstrap unit and device */
-		file->i_ino.i_dev = bootdev;
-		cp = str;
-	} else {
-# define isdigit(n)	((n>='0') && (n<='9'))
-		/*
-	 	 * syntax for possible device name:
-	 	 *	<alpha-string><digit-string><letter>:
-	 	 */
-		for (cp = str; *cp != ':' && !isdigit(*cp); cp++)
-			;
-		for (dp = devsw; dp->dv_name; dp++) {
-			if (!strncmp(str, dp->dv_name,cp-str))
-				goto gotdev;
-		}
-		printf("unknown device\n");
-		file->i_flgs = 0;
-		errno = EDEV;
-		return (-1);
-	gotdev:
-		i = 0;
-		while (*cp >= '0' && *cp <= '9')
-			i = i * 10 + *cp++ - '0';
-		if (i < 0 || i > 255) {
-			printf("minor device number out of range (0-255)\n");
-			file->i_flgs = 0;
-			errno = EUNIT;
-			return (-1);
-		}
-		if (*cp >= 'a' && *cp <= 'h') {
-			if (i > 31) {
-				printf("unit number out of range (0-31)\n");
-				file->i_flgs = 0;
-				errno = EUNIT;
-				return (-1);
-			}
-			i = make_minor(i, *cp++ - 'a');
-		}
-
-		if (*cp++ != ':') {
-			printf("incorrect device specification\n");
-			file->i_flgs = 0;
-			errno = EOFFSET;
-			return (-1);
-		}
-		opendev = file->i_ino.i_dev = makedev(dp-devsw, i);
-	}
-	file->i_boff = 0;
-	devopen(file);
-	if (cp != str && *cp == '\0') {
-		file->i_flgs |= how+1;
-		file->i_cc = 0;
-		file->i_offset = 0;
-		return (fdesc+3);
-	}
-#else notyet
 	for (cp = str; *cp && *cp != '('; cp++)
 			;
 	if (*cp != '(') {
@@ -538,7 +485,7 @@ gotdev:
 	file->i_unit = *cp++ - '0';
 	if (*cp >= '0' && *cp <= '9')
 		file->i_unit = file->i_unit * 10 + *cp++ - '0';
-	if (file->i_unit < 0 || file->i_unit > 63) {
+	if (file->i_unit < 0 || file->i_unit > 31) {
 		printf("Bad unit specifier\n");
 		file->i_flgs = 0;
 		errno = EUNIT;
@@ -560,13 +507,13 @@ badoff:
 		goto badoff;
 	}
 	devopen(file);
+printf("device opened\n");
 	if (*++cp == '\0') {
 		file->i_flgs |= how+1;
 		file->i_cc = 0;
 		file->i_offset = 0;
 		return (fdesc+3);
 	}
-#endif notyet
 	file->i_ma = (char *)(&file->i_fs);
 	file->i_cc = SBSIZE;
 	file->i_bn = SBLOCK + file->i_boff;
@@ -576,19 +523,19 @@ badoff:
 		printf("super block read error\n");
 		return (-1);
 	}
+printf("devread completed\n");
 	if ((i = find(cp, file)) == 0) {
 		file->i_flgs = 0;
 		errno = ESRCH;
 		return (-1);
 	}
-#ifndef	SMALL
+printf("file found\n");
 	if (how != 0) {
 		printf("Can't write files yet.. Sorry\n");
 		file->i_flgs = 0;
 		errno = EIO;
 		return (-1);
 	}
-#endif SMALL
 	if (openi(i, file) < 0) {
 		errno = file->i_error;
 		return (-1);
@@ -616,7 +563,6 @@ close(fdesc)
 	return (0);
 }
 
-#ifndef	SMALL
 ioctl(fdesc, cmd, arg)
 	int fdesc, cmd;
 	char *arg;
@@ -652,6 +598,22 @@ ioctl(fdesc, cmd, arg)
 		file->i_flgs &= ~F_NBSF;
 		break;
 
+	case SAIOECCLIM:
+		file->i_flgs |= F_ECCLM;
+		break;
+
+	case SAIOECCUNL:
+		file->i_flgs &= ~F_ECCLM;
+		break;
+
+	case SAIOSEVRE:
+		file->i_flgs |= F_SEVRE;
+		break;
+
+	case SAIONSEVRE:
+		file->i_flgs &= ~F_SEVRE;
+		break;
+
 	default:
 		error = devioctl(file, cmd, arg);
 		break;
@@ -660,7 +622,6 @@ ioctl(fdesc, cmd, arg)
 		errno = file->i_error;
 	return (error);
 }
-#endif SMALL
 
 exit()
 {
@@ -677,4 +638,12 @@ _stop(s)
 			close(i);
 	printf("%s\n", s);
 	_rtt();
+}
+
+trap(ps)
+	int ps;
+{
+	printf("Trap %o\n", ps);
+	for (;;)
+		;
 }

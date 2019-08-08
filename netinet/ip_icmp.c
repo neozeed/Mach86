@@ -1,10 +1,46 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ip_icmp.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ip_icmp.c	6.13 (Berkeley) 9/16/85
  */
+
+#if CMU
+/***********************************************************************
+ * HISTORY
+ * 17-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Changed spl6 to spl1 if ROMP is defined in iptime.
+ *
+ */
+#endif CMU
 
 #include "param.h"
 #include "systm.h"
@@ -37,25 +73,23 @@ int	icmpprintfs = 0;
  * Generate an error packet of type error
  * in response to bad packet ip.
  */
-/*VARARGS4*/
-icmp_error(oip, type, code, ifp, dest)
+/*VARARGS3*/
+icmp_error(oip, type, code, dest)
 	struct ip *oip;
 	int type, code;
-	struct ifnet *ifp;
 	struct in_addr dest;
 {
 	register unsigned oiplen = oip->ip_hl << 2;
 	register struct icmp *icp;
 	struct mbuf *m;
 	struct ip *nip;
-	unsigned icmplen;
+	int icmplen;
 
 #ifdef ICMPPRINTFS
 	if (icmpprintfs)
 		printf("icmp_error(%x, %d, %d)\n", oip, type, code);
 #endif
-	if (type != ICMP_REDIRECT)
-		icmpstat.icps_error++;
+	icmpstat.icps_error++;
 	/*
 	 * Don't send error if not the first fragment of message.
 	 * Don't EVER error if the old packet protocol was ICMP.
@@ -97,19 +131,22 @@ icmp_error(oip, type, code, ifp, dest)
 	nip->ip_len = htons((u_short)nip->ip_len);
 
 	/*
-	 * Now, copy old ip header in front of icmp message.
+	 * Now, copy old ip header in front of icmp
+	 * message.  This allows us to reuse any source
+	 * routing info present.
 	 */
 	if (m->m_len + oiplen > MLEN)
 		oiplen = sizeof(struct ip);
 	if (m->m_len + oiplen > MLEN)
 		panic("icmp len");
 	m->m_off -= oiplen;
-	m->m_len += oiplen;
 	nip = mtod(m, struct ip *);
 	bcopy((caddr_t)oip, (caddr_t)nip, oiplen);
-	nip->ip_len = m->m_len;
+	nip->ip_len = m->m_len + oiplen;
 	nip->ip_p = IPPROTO_ICMP;
-	icmp_reflect(nip, ifp);
+	/* icmp_send adds ip header to m_off and m_len, so we deduct here */
+	m->m_off += oiplen;
+	icmp_reflect(nip, in_ifaddr->ia_ifp);
 
 free:
 	m_freem(dtom(oip));
@@ -125,7 +162,7 @@ struct in_ifaddr *ifptoia();
  * Process a received ICMP message.
  */
 icmp_input(m, ifp)
-	register struct mbuf *m;
+	struct mbuf *m;
 	struct ifnet *ifp;
 {
 	register struct icmp *icp;
@@ -163,8 +200,6 @@ icmp_input(m, ifp)
 		icmpstat.icps_checksum++;
 		goto free;
 	}
-	m->m_len += hlen;
-	m->m_off -= hlen;
 
 #ifdef ICMPPRINTFS
 	/*
@@ -175,7 +210,7 @@ icmp_input(m, ifp)
 		    icp->icmp_code);
 #endif
 	if (icp->icmp_type > ICMP_MAXTYPE)
-		goto raw;
+		goto free;
 	icmpstat.icps_inhist[icp->icmp_type]++;
 	code = icp->icmp_code;
 	switch (icp->icmp_type) {
@@ -218,11 +253,11 @@ icmp_input(m, ifp)
 		icmpsrc.sin_addr = icp->icmp_ip.ip_dst;
 		if (ctlfunc = inetsw[ip_protox[icp->icmp_ip.ip_p]].pr_ctlinput)
 			(*ctlfunc)(code, (struct sockaddr *)&icmpsrc);
-		break;
+		goto free;
 
 	badcode:
 		icmpstat.icps_badcode++;
-		break;
+		goto free;
 
 	case ICMP_ECHO:
 		icp->icmp_type = ICMP_ECHOREPLY;
@@ -231,7 +266,7 @@ icmp_input(m, ifp)
 	case ICMP_TSTAMP:
 		if (icmplen < ICMP_TSLEN) {
 			icmpstat.icps_badlen++;
-			break;
+			goto free;
 		}
 		icp->icmp_type = ICMP_TSTAMPREPLY;
 		icp->icmp_rtime = iptime();
@@ -248,7 +283,7 @@ icmp_input(m, ifp)
 
 	case ICMP_MASKREQ:
 		if (icmplen < ICMP_MASKLEN || (ia = ifptoia(ifp)) == 0)
-			break;
+			goto free;
 		icp->icmp_type = ICMP_IREQREPLY;
 		icp->icmp_mask = ia->ia_netmask;
 		if (ip->ip_src.s_addr == 0) {
@@ -257,17 +292,12 @@ icmp_input(m, ifp)
 			else if (ia->ia_ifp->if_flags & IFF_POINTOPOINT)
 			    ip->ip_src = satosin(&ia->ia_dstaddr)->sin_addr;
 		}
-reflect:
-		ip->ip_len += hlen;	/* since ip_input deducts this */
-		icmpstat.icps_reflect++;
-		icmpstat.icps_outhist[icp->icmp_type]++;
-		icmp_reflect(ip, ifp);
-		return;
+		goto reflect;
 
 	case ICMP_REDIRECT:
 		if (icmplen < ICMP_ADVLENMIN || icmplen < ICMP_ADVLEN(icp)) {
 			icmpstat.icps_badlen++;
-			break;
+			goto free;
 		}
 		/*
 		 * Short circuit routing redirects to force
@@ -289,7 +319,6 @@ reflect:
 			rtredirect((struct sockaddr *)&icmpsrc,
 			  (struct sockaddr *)&icmpdst, RTF_GATEWAY,
 			  (struct sockaddr *)&icmpgw);
-			icmpsrc.sin_addr = icp->icmp_ip.ip_dst;
 			pfctlinput(PRC_REDIRECT_NET,
 			  (struct sockaddr *)&icmpsrc);
 		} else {
@@ -300,42 +329,43 @@ reflect:
 			pfctlinput(PRC_REDIRECT_HOST,
 			  (struct sockaddr *)&icmpsrc);
 		}
-		break;
+		/* FALL THROUGH */
 
-	/*
-	 * No kernel processing for the following;
-	 * just fall through to send to raw listener.
-	 */
 	case ICMP_ECHOREPLY:
 	case ICMP_TSTAMPREPLY:
 	case ICMP_IREQREPLY:
 	case ICMP_MASKREPLY:
+		icmpsrc.sin_addr = ip->ip_src;
+		icmpdst.sin_addr = ip->ip_dst;
+		raw_input(dtom(icp), &icmproto, (struct sockaddr *)&icmpsrc,
+		  (struct sockaddr *)&icmpdst);
+		return;
+
 	default:
-		break;
+		goto free;
 	}
-
-raw:
-	icmpsrc.sin_addr = ip->ip_src;
-	icmpdst.sin_addr = ip->ip_dst;
-	raw_input(m, &icmproto, (struct sockaddr *)&icmpsrc,
-	    (struct sockaddr *)&icmpdst);
+reflect:
+	ip->ip_len += hlen;		/* since ip_input deducts this */
+	icmpstat.icps_reflect++;
+	icmpstat.icps_outhist[icp->icmp_type]++;
+	icmp_reflect(ip, ifp);
 	return;
-
 free:
-	m_freem(m);
+	m_freem(dtom(ip));
 }
 
 /*
  * Reflect the ip packet back to the source
  */
 icmp_reflect(ip, ifp)
-	register struct ip *ip;
+	struct ip *ip;
 	struct ifnet *ifp;
 {
 	register struct in_ifaddr *ia;
+	register u_char *cp;
+	int opt, optlen, cnt;
 	struct in_addr t;
-	struct mbuf *opts = 0, *ip_srcroute();
-	int optlen = (ip->ip_hl << 2) - sizeof(struct ip);
+	struct in_addr *p, *q;
 
 	t = ip->ip_dst;
 	ip->ip_dst = ip->ip_src;
@@ -354,23 +384,60 @@ icmp_reflect(ip, ifp)
 	}
 	if (ia == (struct in_ifaddr *)0)
 		ia = ifptoia(ifp);
-	if (ia == (struct in_ifaddr *)0)
-		ia = in_ifaddr;
-	t = IA_SIN(ia)->sin_addr;
+	if (ia)
+		t = IA_SIN(ia)->sin_addr;
 	ip->ip_src = t;
 
-	if (optlen > 0) {
-		/*
-		 * Retrieve any source routing from the incoming packet
-		 * and strip out other options.  Adjust the IP length.
-		 */
-		opts = ip_srcroute();
-		ip->ip_len -= optlen;
-		ip_stripoptions(ip, (struct mbuf *)0);
+	/*
+	 * If the incoming packet was source-routed,
+	 * we need to reverse the route and set the next-hop destination.
+	 * We can dispense with the error checking
+	 * as ip_dooptions has been through here before.
+	 */
+	if ((ip->ip_hl << 2) > sizeof(struct ip)) {
+		cp = (u_char *)(ip + 1);
+		cnt = (ip->ip_hl << 2) - sizeof (struct ip);
+		for (; cnt > 0; cnt -= optlen, cp += optlen) {
+			opt = cp[IPOPT_OPTVAL];
+			if (opt == IPOPT_EOL)
+				break;
+			if (opt == IPOPT_NOP)
+				optlen = 1;
+			else
+				optlen = cp[IPOPT_OLEN];
+			if (opt == IPOPT_LSRR || opt == IPOPT_SSRR) {
+				p = (struct in_addr *)
+				    (cp + cp[IPOPT_OFFSET] - 1) - 1;
+				q = (struct in_addr *)(cp + IPOPT_MINOFF - 1);
+				/*
+				 * First switch the last route entry
+				 * (first hop for return) with ip_dst
+				 * (final hop on return).
+				 */
+				bcopy((caddr_t)p, (caddr_t)&t, sizeof(t));
+				bcopy((caddr_t)&ip->ip_dst, (caddr_t)p,
+				   sizeof(struct in_addr));
+				ip->ip_dst = t;
+				p--;
+				/*
+				 * Then reverse remaining route entries.
+				 */
+				while (p > q) {
+					bcopy((caddr_t)p, (caddr_t)&t,
+					    sizeof(struct in_addr));
+					bcopy((caddr_t)q, (caddr_t)p,
+					    sizeof(struct in_addr));
+					bcopy((caddr_t)&t, (caddr_t)q,
+					    sizeof(struct in_addr));
+					p--;
+					q++;
+				}
+				cp[IPOPT_OFFSET] = IPOPT_MINOFF;
+				break;
+			}
+		}
 	}
-	icmp_send(ip, opts);
-	if (opts)
-		(void)m_free(opts);
+	icmp_send(ip);
 }
 
 struct in_ifaddr *
@@ -389,9 +456,8 @@ ifptoia(ifp)
  * Send an icmp packet back to the ip level,
  * after supplying a checksum.
  */
-icmp_send(ip, opts)
-	register struct ip *ip;
-	struct mbuf *opts;
+icmp_send(ip)
+	struct ip *ip;
 {
 	register int hlen;
 	register struct icmp *icp;
@@ -399,8 +465,6 @@ icmp_send(ip, opts)
 
 	m = dtom(ip);
 	hlen = ip->ip_hl << 2;
-	m->m_off += hlen;
-	m->m_len -= hlen;
 	icp = mtod(m, struct icmp *);
 	icp->icmp_cksum = 0;
 	icp->icmp_cksum = in_cksum(m, ip->ip_len - hlen);
@@ -410,16 +474,20 @@ icmp_send(ip, opts)
 	if (icmpprintfs)
 		printf("icmp_send dst %x src %x\n", ip->ip_dst, ip->ip_src);
 #endif
-	(void) ip_output(m, opts, (struct route *)0, 0);
+	(void) ip_output(m, (struct mbuf *)0, (struct route *)0, 0);
 }
 
 n_time
 iptime()
 {
-	struct timeval atv;
+#ifndef ROMP
+	int s = spl6();
+#else ROMP
+	int s = spl1();
+#endif ROMP
 	u_long t;
 
-	microtime(&atv);
-	t = (atv.tv_sec % (24*60*60)) * 1000 + atv.tv_usec / 1000;
+	t = (time.tv_sec % (24*60*60)) * 1000 + time.tv_usec / 1000;
+	splx(s);
 	return (htonl(t));
 }

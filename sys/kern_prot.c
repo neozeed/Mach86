@@ -1,10 +1,54 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)kern_prot.c	7.1 (Berkeley) 6/5/86
+ *	@(#)kern_prot.c	6.5 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 07-Sep-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT: Changed to remember a setgroups() call to detect a
+ *	4.1 process which has never been placed into any groups.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_compat.h"
+#endif	CMU
 
 /*
  * System calls related to processes and protection
@@ -139,10 +183,10 @@ setreuid()
 #ifdef QUOTA
 	if (u.u_quota->q_uid != ruid) {
 		qclean();
-		qstart(getquota((uid_t)ruid, 0, 0));
+		qstart(getquota(ruid, 0, 0));
 	}
 #endif
-	u.u_procp->p_uid = euid;
+	u.u_procp->p_uid = ruid;
 	u.u_ruid = ruid;
 	u.u_uid = euid;
 }
@@ -168,7 +212,7 @@ setregid()
 		return;
 	if (u.u_rgid != rgid) {
 		leavegroup(u.u_rgid);
-		(void) entergroup((gid_t)rgid);
+		(void) entergroup(rgid);
 		u.u_rgid = rgid;
 	}
 	u.u_gid = egid;
@@ -190,6 +234,9 @@ setgroups()
 		u.u_error = EINVAL;
 		return;
 	}
+#if	CS_COMPAT
+	u.u_modes |= UMODE_SETGROUPS;
+#endif	CS_COMPAT
 	u.u_error = copyin((caddr_t)uap->gidset, (caddr_t)groups,
 	    uap->gidsetsize * sizeof (groups[0]));
 	if (u.u_error)
@@ -208,7 +255,7 @@ setgroups()
  * Delete gid from the group set.
  */
 leavegroup(gid)
-	gid_t gid;
+	int gid;
 {
 	register gid_t *gp;
 
@@ -226,7 +273,7 @@ found:
  * Add gid to the group set.
  */
 entergroup(gid)
-	gid_t gid;
+	int gid;
 {
 	register gid_t *gp;
 

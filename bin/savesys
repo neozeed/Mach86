@@ -1,0 +1,34 @@
+#
+# HISTORY
+# 11-Sep-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+#	Updated to handle new and/or deleted files.
+#
+set ver = `cat /usr/sys/Melange/version`
+
+echo Saving files in version $ver that are to be changed.
+
+set dest = /usr/Melange-Archives/Melange-$ver
+mkdir $dest
+cp /vmunix $dest
+cp /usr/sys/{CHANGELOG,ChangedFiles,NewFiles,DeletedFiles,Diffs,Tar} $dest
+
+set base = $cwd
+
+cd /usr/sys
+
+#
+echo save files which are changing
+#
+tar crf - `cat $base/ChangedFiles` | \
+	(cd $dest; tar xvf -)
+#
+echo save files which were new in this version
+#
+tar crf - `cat /usr/sys/NewFiles` | \
+	(cd $dest; tar xvf -)
+
+echo Don\'t forget to update the CHANGELOG
+
+unset $dest
+unset base
+unset ver

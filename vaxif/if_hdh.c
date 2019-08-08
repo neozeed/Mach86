@@ -1,4 +1,31 @@
-/*	@(#)if_hdh.c	7.1 (Berkeley) 6/5/86 */
+/*
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+
 
 
 /************************************************************************\
@@ -64,26 +91,25 @@ Revision History:
 
 #include "../machine/pte.h"
 
-#include "param.h"
-#include "systm.h"
-#include "mbuf.h"
-#include "buf.h"
-#include "protosw.h"
-#include "socket.h"
-#include "vmmac.h"
+#include "../h/param.h"
+#include "../h/systm.h"
+#include "../h/mbuf.h"
+#include "../h/buf.h"
+#include "../h/protosw.h"
+#include "../h/socket.h"
+#include "../h/vmmac.h"
 
 #include "../net/if.h"
 #include "../netimp/if_imp.h"
 
 #include "../vax/cpu.h"
 #include "../vax/mtpr.h"
+#include "../vaxif/if_hdhreg.h"
+#include "../vaxif/if_uba.h"
 #include "../vaxuba/ubareg.h"
 #include "../vaxuba/ubavar.h"
 
-#include "if_hdhreg.h"
-#include "if_uba.h"
-
-int     hdhprobe(), hdhattach(), hdhintr();
+int     hdhprobe(), hdhattach(), hdhrint(), hdhxint();
 struct  uba_device *hdhinfo[NHDH];
 u_short hdhstd[] = { 0 };
 struct  uba_driver hdhdriver =
@@ -174,7 +200,6 @@ caddr_t reg;
 	struct hdhregs *addr = (struct hdhregs *)reg;
 #ifdef lint
 	br = 0; cvec = br; br = cvec;
-	hdhintr(0);
 #endif
 
 	br = 0x15;			/* priority 21 (5 on UNIBUS) */
@@ -217,7 +242,7 @@ hdhattach(ui)
 	} *ifimp;
 
 	if ((ifimp = (struct ifimpcb *)impattach(ui, hdhreset)) == 0)
-		return;;
+		panic("hdhattach");
 	sc->hdh_if = &ifimp->ifimp_if;
 	ip = &ifimp->ifimp_impcb;
 	sc->hdh_ic = ip;
@@ -243,8 +268,6 @@ int unit, uban;
 	    || (ui->ui_ubanum != uban))
 		return;
 	printf(" hdh%d", unit);
-	sc->hdh_if->if_flags &= ~IFF_RUNNING;
-	sc->hdh_flags = 0;
 	(*sc->hdh_if->if_init)(unit);
 }
 
@@ -277,8 +300,11 @@ hdhinit(unit)
 int unit;
 {	
 	register struct hdh_softc *sc;
+	register struct hdhregs *addr;
 	register struct uba_device *ui;
-	int i;
+	register struct umc_chan *up;
+	register struct mbuf *m, *n;
+	int i, s, ubano;
 
 #ifdef HDHDEBUG
 	printf("HDH INIT\n");
@@ -289,10 +315,13 @@ int unit;
 		printf("hdh%d: not alive\n", unit);
 		return(0);
 	}
+	addr = (struct hdhregs *)ui->ui_addr;
 	sc = &hdh_softc[unit];
 
-	if (sc->hdh_flags & HDH_STARTED)
+	if (sc->hdh_flags & HDH_STARTED) {
+		printf("hdh%d: re-init\n", unit);
 		return(1);
+	}
 
 	/*
 	 * Alloc uba resources
@@ -307,7 +336,6 @@ int unit;
 		}
 	}
 
-	sc->hdh_if->if_flags |= IFF_RUNNING;
 	sc->hdh_flags = HDH_STARTED;
 
 	/*
@@ -458,7 +486,8 @@ int unit;
 	register struct hdh_softc *sc = &hdh_softc[unit];
 	register struct hdh_chan *hc;
 	register struct hdhregs *addr = (struct hdhregs *)hdhinfo[unit]->ui_addr;
-	int lcn, type, cc, cnt;
+	register struct mbuf *m;
+	int lcn, type, cc, cnt, s;
 
 	/*
 	 * Check for hardware errors.
@@ -533,7 +562,7 @@ int unit;
 		if (lcn > HDHSUPW)
 			hdh_data(unit, lcn, cc, cnt);
 		else
-			hdh_supr(unit, lcn, cc);
+			hdh_supr(unit, lcn, cc, cnt);
 
 	}
 
@@ -566,8 +595,7 @@ int unit, lcn, cc, rcnt;
 			 * Queue good packet for input 
 			 */
 			sc->hdh_if->if_ipackets++;
-			m = if_rubaget(&sc->hdh_ifuba[lcn>>1], rcnt, 0,
-				sc->hdh_if);
+			m = if_rubaget(&sc->hdh_ifuba[lcn>>1], rcnt, 0);
 			impinput(unit, m);
 		}
 
@@ -588,12 +616,14 @@ int unit, lcn, cc, rcnt;
 /*
  * supervisor channel interrupt completion handler
  */
-hdh_supr(unit, lcn, cc)
-int unit, lcn, cc;
+hdh_supr(unit, lcn, cc, rcnt)
+int unit, lcn, cc, rcnt;
 {
 	register struct hdh_softc *sc = &hdh_softc[unit];
 	register struct hdh_chan *hc = &sc->hdh_chan[lcn];
+	register struct uba_device *ui;
 	short *p;
+	int i;
 	
 
 	/* was it read or write? */
@@ -658,13 +688,14 @@ int unit, len;
 char *msg;
 {
 	register struct hdh_softc *sc = &hdh_softc[unit];
+	register struct hdh_chan *hc = &sc->hdh_chan[HDHSUPW];
 	register struct mbuf *m;
 	register char *p;
 	register int cnt;
 
 	if ((m = m_get(M_DONTWAIT, MT_DATA)) == NULL) {
 		printf("hdh%d: cannot get supervisor cmnd buffer\n", unit);
-			return;
+			return(0);
 	}
 
 	cnt = len;
@@ -676,5 +707,8 @@ char *msg;
 	cnt = if_wubaput(&sc->hdh_ifuba[SUPR], m);
 
 	hdh_iorq(unit, HDHSUPW, cnt, HDHWRT+HDHEOS);
+
+	return(1);
 }
+
 #endif NHDH

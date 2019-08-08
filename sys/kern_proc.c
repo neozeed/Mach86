@@ -1,14 +1,56 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)kern_proc.c	7.1 (Berkeley) 6/5/86
+ *	@(#)kern_proc.c	6.6 (Berkeley) 6/8/85
  */
+#if	CMU
+
+/*
+ ************************************************************************
+ * HISTORY
+ * 14-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Added switch ROMP around #includes "../machine/psl.h" so that
+ *	the Sailboat doesn't gag on it.  (Question: why does the vax
+ *	include it if it still compiles when we cut it out???)
+ *
+ ************************************************************************
+ */
+#endif	CMU
 
 #include "../machine/reg.h"
 #include "../machine/pte.h"
+#ifndef	romp
 #include "../machine/psl.h"
+#endif	romp
 
 #include "param.h"
 #include "systm.h"
@@ -30,9 +72,10 @@
 #include "mbuf.h"
 
 /*
- * Clear any pending stops for top and all descendents.
+ * Change the process group of top and all descendents to npgrp.
+ * If npgrp is -1, instead clear any pending stops.
  */
-spgrp(top)
+spgrp(top, npgrp)
 	struct proc *top;
 {
 	register struct proc *p;
@@ -40,8 +83,11 @@ spgrp(top)
 
 	p = top;
 	for (;;) {
-		p->p_sig &=
+		if (npgrp == -1)
+			p->p_sig &=
 			  ~(sigmask(SIGTSTP)|sigmask(SIGTTIN)|sigmask(SIGTTOU));
+		else
+			p->p_pgrp = npgrp;
 		f++;
 		/*
 		 * If this process has children, descend to them next,
@@ -58,6 +104,8 @@ spgrp(top)
 			p = p->p_pptr;
 			if (p == top)
 				return (f);
+if (p == &proc[1])
+	panic("spgrp");
 			if (p->p_osptr) {
 				p = p->p_osptr;
 				break;

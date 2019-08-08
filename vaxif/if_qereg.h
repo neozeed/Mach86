@@ -1,30 +1,60 @@
-/*	@(#)if_qereg.h	7.1 (Berkeley) 6/5/86 */
-
+/*
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
 /* @(#)if_qereg.h	1.2 (ULTRIX) 1/3/85 */
- 
-/****************************************************************
- *								*
- *        Licensed from Digital Equipment Corporation 		*
- *                       Copyright (c) 				*
- *               Digital Equipment Corporation			*
- *                   Maynard, Massachusetts 			*
- *                         1985, 1986 				*
- *                    All rights reserved. 			*
- *								*
- *        The Information in this software is subject to change *
- *   without notice and should not be construed as a commitment *
- *   by  Digital  Equipment  Corporation.   Digital   makes  no *
- *   representations about the suitability of this software for *
- *   any purpose.  It is supplied "As Is" without expressed  or *
- *   implied  warranty. 					*
- *								*
- *        If the Regents of the University of California or its *
- *   licensees modify the software in a manner creating  	*
- *   diriviative copyright rights, appropriate copyright  	*
- *   legends may be placed on  the drivative work in addition   *
- *   to that set forth above. 					*
- *								*
- ****************************************************************/
+
+/************************************************************************
+ *									*
+ *			Copyright (c) 1983 by				*
+ *		Digital Equipment Corporation, Maynard, MA		*
+ *			All rights reserved.				*
+ *									*
+ *   This software is furnished under a license and may be used and	*
+ *   copied  only  in accordance with the terms of such license and	*
+ *   with the  inclusion  of  the  above  copyright  notice.   This	*
+ *   software  or  any  other copies thereof may not be provided or	*
+ *   otherwise made available to any other person.  No title to and	*
+ *   ownership of the software is hereby transferred.			*
+ *									*
+ *   This software is  derived  from  software  received  from  the	*
+ *   University    of   California,   Berkeley,   and   from   Bell	*
+ *   Laboratories.  Use, duplication, or disclosure is  subject  to	*
+ *   restrictions  under  license  agreements  with  University  of	*
+ *   California and with AT&T.						*
+ *									*
+ *   The information in this software is subject to change  without	*
+ *   notice  and should not be construed as a commitment by Digital	*
+ *   Equipment Corporation.						*
+ *									*
+ *   Digital assumes no responsibility for the use  or  reliability	*
+ *   of its software on equipment which is not supplied by Digital.	*
+ *									*
+ ************************************************************************/
+
 /* ---------------------------------------------------------------------
  * Modification History 
  *
@@ -34,20 +64,20 @@
  * 
  * ---------------------------------------------------------------------
  */
- 
+
 /*
  * Digital Q-BUS to NI Adapter 
  */
 struct qedevice {
 	u_short	qe_sta_addr[2]; 	/* Station address (actually 6 	*/
-	u_short	qe_rcvlist_lo; 		/* Receive list lo address 	*/
-	u_short	qe_rcvlist_hi; 		/* Receive list hi address 	*/
+	u_short	qe_rcvlist_lo; 		/* Recieve list lo address 	*/
+	u_short	qe_rcvlist_hi; 		/* Recieve list hi address 	*/
 	u_short	qe_xmtlist_lo;		/* Transmit list lo address 	*/
 	u_short	qe_xmtlist_hi;		/* Transmit list hi address 	*/
 	u_short	qe_vector;		/* Interrupt vector 		*/
 	u_short	qe_csr;			/* Command and Status Register 	*/
 };
- 
+
 /*
  * Command and status bits (csr)
  */
@@ -65,7 +95,7 @@ struct qedevice {
 #define QE_POWERUP	0x1000		/* Tranceiver power on		*/
 #define QE_CARRIER	0x2000		/* Carrier detect		*/
 #define QE_RCV_INT	0x8000		/* Receiver interrupt		*/
- 
+
 /*
  * Transmit and receive ring discriptor ---------------------------
  *
@@ -92,7 +122,7 @@ struct qe_ring	{
 	u_short qe_status1;		/* Status word one		*/
 	u_short qe_status2;		/* Status word two		*/
 };
- 
+
 /*
  * Status word definations (receive)
  *	word1
@@ -109,7 +139,7 @@ struct qe_ring	{
 #define QE_LASTNOT		0x8000	/* Not the last in the packet	*/
 /*	word2								*/
 #define QE_RBL_LO		0x00ff	/* Low bits of receive len	*/
- 
+
 /*
  * Status word definations (transmit)
  *	word1
@@ -122,14 +152,14 @@ struct qe_ring	{
 #define QE_LOSS			0x1000	/* Loss of carrier while xmit	*/
 /*	word2								*/
 #define QE_TDR			0x3fff	/* Time domain reflectometry	*/
- 
+
 /*
  * General constant definations
  */
 #define QEALLOC 		0	/* Allocate an mbuf		*/
 #define QENOALLOC		1	/* No mbuf allocation		*/
 #define QEDEALLOC		2	/* Release an mbuf chain	*/
- 
+
 #define QE_NOTYET		0x8000	/* Descriptor not in use yet	*/
 #define QE_INUSE		0x4000	/* Descriptor being used by QNA	*/
 #define QE_MASK			0xc000	/* Lastnot/error/used mask	*/

@@ -1,10 +1,52 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)vm_drum.c	7.1 (Berkeley) 6/5/86
+ *	@(#)vm_drum.c	6.4 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ ************************************************************************
+ * HISTORY
+ * 16-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Added include of ../machine/rosetta.h if ROMP is defined.
+ *
+ ************************************************************************
+ */
+
+#include "mach_vm.h"
+#endif	CMU
+
+#if	MACH_VM
+#else	MACH_VM
 
 #include "../machine/pte.h"
 
@@ -19,6 +61,10 @@
 #include "vm.h"
 #include "cmap.h"
 #include "kernel.h"
+
+#ifdef	romp
+#include "../machine/rosetta.h"
+#endif	romp
 
 /*
  * Expand the swap area for both the data and stack segments.
@@ -168,8 +214,6 @@ vsxfree(xp, ts)
  * Swap a segment of virtual memory to disk,
  * by locating the contiguous dirty pte's
  * and calling vschunk with each chunk.
- * We ignore swap errors here because swap()
- * will panic on an error when writing to disk.
  */
 vsswap(p, pte, type, vsbase, vscount, dmp)
 	struct proc *p;
@@ -229,8 +273,7 @@ vschunk(p, base, size, type, dmp)
 			db.db_size = dmtext - base % dmtext;
 			if (db.db_size > size)
 				db.db_size = size;
-			(void)swap(p,
-			    p->p_textp->x_daddr[base/dmtext] + base%dmtext,
+			swap(p, p->p_textp->x_daddr[base/dmtext] + base%dmtext,
 			    ptob(tptov(p, dtoc(base))), (int)dtob(db.db_size),
 			    B_WRITE, 0, swapdev, 0);
 			pte = tptopte(p, dtoc(base));
@@ -246,7 +289,7 @@ vschunk(p, base, size, type, dmp)
 		v = type==CSTACK ?
 		    sptov(p, dtoc(base+db.db_size)-1) :
 		    dptov(p, dtoc(base));
-		(void)swap(p, db.db_base, ptob(v), (int)dtob(db.db_size),
+		swap(p, db.db_base, ptob(v), (int)dtob(db.db_size),
 		    B_WRITE, 0, swapdev, 0);
 		pte = type==CSTACK ?
 		    sptopte(p, dtoc(base+db.db_size)-1) :
@@ -308,3 +351,4 @@ vtod(p, v, dmap, smap)
 		vstodb(ctod(vtodp(p, v)), ctod(1), dmap, &db, 0);
 	return (db.db_base);
 }
+#endif	MACH_VM

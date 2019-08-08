@@ -1,10 +1,59 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)uipc_mbuf.c	7.1 (Berkeley) 6/5/86
+ *	@(#)uipc_mbuf.c	6.8 (Berkeley) 9/16/85
  */
+#if	CMU
+
+/*
+ ************************************************************************
+ * HISTORY
+ * 14-Apr-86  David Golub (dbg) at Carnegie-Mellon University
+ *	Round up size in m_clalloc to a VM-page multiple, to avoid
+ *	wasting space.
+ *
+ * 25-Feb-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Use new VM primitives to get more space.
+ *
+ ************************************************************************
+ */
+#include "mach_vm.h"
+#endif	CMU
+
+#if	MACH_VM
+#include "../vm/vm_map.h"
+#include "../vm/vm_kern.h"
+#include "../vm/vm_param.h"
+#endif	MACH_VM
 
 #include "../machine/pte.h"
 
@@ -25,7 +74,7 @@ mbinit()
 	s = splimp();
 	if (m_clalloc(4096/CLBYTES, MPG_MBUFS, M_DONTWAIT) == 0)
 		goto bad;
-	if (m_clalloc(4096/CLBYTES, MPG_CLUSTERS, M_DONTWAIT) == 0)
+	if (m_clalloc(8*4096/CLBYTES, MPG_CLUSTERS, M_DONTWAIT) == 0)
 		goto bad;
 	splx(s);
 	return;
@@ -45,11 +94,23 @@ m_clalloc(ncl, how, canwait)
 	register struct mbuf *m;
 	register int i;
 
+#if	MACH_VM
+	vm_size_t	size;
+
+	size = round_page(ncl * CLBYTES);
+	m = (struct mbuf *) kmem_alloc(mb_map, size, canwait == M_WAIT);
+	if (m == NULL)
+		return(0);
+	/*
+	 *	Use the entire amount allocated.
+	 */
+	ncl = size / CLBYTES;
+#else	MACH_VM
 	npg = ncl * CLSIZE;
 	mbx = rmalloc(mbmap, (long)npg);
 	if (mbx == 0) {
 		if (canwait == M_WAIT)
-			panic("out of mbufs: map full");
+			panic("out of mbuf map");
 		return (0);
 	}
 	m = cltom(mbx / CLSIZE);
@@ -58,6 +119,7 @@ m_clalloc(ncl, how, canwait)
 		return (0);
 	}
 	vmaccess(&Mbmap[mbx], (caddr_t)m, npg);
+#endif	MACH_VM
 	switch (how) {
 
 	case MPG_CLUSTERS:

@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)syslog.h	7.1 (Berkeley) 6/4/86
+ *	@(#)syslog.h	4.6 (Berkeley) 9/17/85
  */
 
 /*
@@ -15,9 +42,7 @@
 #define LOG_MAIL	(2<<3)	/* mail system */
 #define LOG_DAEMON	(3<<3)	/* system daemons */
 #define LOG_AUTH	(4<<3)	/* security/authorization messages */
-#define LOG_SYSLOG	(5<<3)	/* messages generated internally by syslogd */
-#define LOG_LPR		(6<<3)	/* line printer subsystem */
-	/* other codes through 15 reserved for system use */
+	/* codes 5 - 15 reserved for system use */
 #define LOG_LOCAL0	(16<<3)	/* reserved for local use */
 #define LOG_LOCAL1	(17<<3)	/* reserved for local use */
 #define LOG_LOCAL2	(18<<3)	/* reserved for local use */
@@ -43,22 +68,11 @@
 #define LOG_INFO	6	/* informational */
 #define LOG_DEBUG	7	/* debug-level messages */
 
-#define LOG_PRIMASK	0x0007	/* mask to extract priority part (internal) */
-
-/*
- * arguments to setlogmask.
- */
-#define	LOG_MASK(pri)	(1 << (pri))		/* mask for one priority */
-#define	LOG_UPTO(pri)	((1 << ((pri)+1)) - 1)	/* all priorities through pri */
+#define LOG_PRIMASK	0x0007	/* mask to extract priority part */
 
 /*
  *  Option flags for openlog.
- *
- *	LOG_ODELAY no longer does anything; LOG_NDELAY is the
- *	inverse of what it used to be.
  */
-#define	LOG_PID		0x01	/* log the pid with each message */
-#define	LOG_CONS	0x02	/* log on the console if errors in sending */
-#define	LOG_ODELAY	0x04	/* delay open until syslog() is called */
-#define LOG_NDELAY	0x08	/* don't delay open */
-#define LOG_NOWAIT	0x10	/* if forking to log on console, don't wait() */
+#define	LOG_PID		01	/* log the pid with each message */
+#define	LOG_CONS	02	/* log on the console if errors in sending */
+#define	LOG_ODELAY	04	/* delay open until syslog() is called */

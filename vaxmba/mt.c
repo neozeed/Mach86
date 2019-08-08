@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)mt.c	7.1 (Berkeley) 6/5/86
+ *	@(#)mt.c	6.5 (Berkeley) 6/8/85
  */
 
 #include "mu.h"
@@ -110,6 +137,9 @@ void mtcreset();
 mtattach(mi)
 	struct mba_device *mi;
 {
+#ifdef lint
+	mtread(0); mtwrite(0); mtioctl(0, 0, 0, 0);
+#endif
 }
 
 mtslave(mi, ms, sn)
@@ -119,7 +149,7 @@ mtslave(mi, ms, sn)
 {
 	register struct mu_softc *sc = &mu_softc[ms->ms_unit];
 	register struct mtdevice *mtaddr = (struct mtdevice *)mi->mi_drv;
-	int s = spl5(), rtn = 0, i;
+	int s = spl7(), rtn = 0, i;
 
 	/* Just in case the controller is ill, reset it.  Then issue	*/
 	/* a sense operation and wait about a second for it to respond.	*/
@@ -295,7 +325,6 @@ mtustart(mi)
 	register struct buf *bp = mi->mi_tab.b_actf;
 	register struct mu_softc *sc = &mu_softc[MUUNIT(bp->b_dev)];
 	daddr_t blkno;
-	int count;
 
 	if (sc->sc_openf < 0) {
 		bp->b_flags |= B_ERROR;
@@ -368,12 +397,13 @@ mtustart(mi)
 	/* Issue skip operations to position the next block for cooked I/O. */
 
 	if (blkno < bdbtofsb(bp->b_blkno))
-		count = (unsigned)(bdbtofsb(bp->b_blkno) - blkno);
+		mtaddr->mtncs[MUUNIT(bp->b_dev)] =
+		  (min((unsigned)(bdbtofsb(bp->b_blkno) - blkno), 0377) << 8) |
+			MT_SFORW|MT_GO;
 	else
-		count = (unsigned)(blkno - bdbtofsb(bp->b_blkno));
-	if (count > 0377)
-		count = 0377;
-	mtaddr->mtncs[MUUNIT(bp->b_dev)] = count | MT_SFORW|MT_GO;
+		mtaddr->mtncs[MUUNIT(bp->b_dev)] =
+		  (min((unsigned)(blkno - bdbtofsb(bp->b_blkno)), 0377) << 8) |
+			MT_SREV|MT_GO;
 	return (MBU_STARTED);
 }
 

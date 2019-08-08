@@ -1,10 +1,117 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ufs_syscalls.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ufs_syscalls.c	6.21 (Berkeley) 9/5/85
  */
+#if	CMU
+ 
+/*
+ **********************************************************************
+ * HISTORY
+ * 23-May-86  David Golub (dbg) at Carnegie-Mellon University
+ *	Restored checks for text files still in cache.
+ *
+ * 28-Apr-86  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_GENERIC:  correct chown() fix typo introduced in merge so
+ *	that it follows symbolic links again.
+ *
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.  (Left a section for handling the old directory
+ *	format out).
+ *
+ * 21-Nov-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	WB_ONLY:  Don't do super-user check for symbol links.
+ *
+ * 21-Oct-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_BUGFIX:  fix bug in copen() which neglected to allow for
+ *	another signal interrupting the close following the previous
+ *	signal which aborted the open.
+ *	[V1(1)]
+ *
+ * 19-Oct-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_RFS:  Modify chdirec() to clear remote current/root
+ *	directory state bits.
+ *
+ * 17-Oct-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_GENERIC:  Fix chown() system call to follow symbolic links.
+ *	[V1(1)].
+ *
+ * 27-Sep-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_GENERIC:  Restrict symlink call() to super-user for now.
+ *	CS_COMPAT:  Change read-link to understand CMU symbolic links.
+ *
+ * 07-Sep-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_GENERIC:  changed to default to 4.1-style inode group
+ *	ownership (from effective GID).
+ *	CS_COMPAT: changed not to clear SGID bit on inode create or
+ *	mode change if no group list has yet been set (i.e.  the
+ *	process has had no 4.2 ancestor to set the group list).
+ *	[V1(1)]
+ *
+ * 20-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_RFS:  enabled remote namei() processing for all
+ *	routines in this module;  added hook to remote inode file
+ *	descriptor handling in getinode().
+ *	[V1(1)]
+ *
+ * 18-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_XMOD:  Carried over check for exclusive use mode in
+ *	copen() before allowing open to succeed.
+ *	[V1(1)]
+ *
+ * 12-Jun-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_OLDDIR:  modified rename() and mkdir() to also support old
+ *	directory formats.
+ *	[V1(1)]
+ *
+ * 03-Jun-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT:  added hooks to allow BBNNET device open call
+ *	(where mode parameter is a connection block and not mode bits)
+ *	and MPX check in lseek() for now.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_bugfix.h"
+#include "cs_compat.h"
+#include "cs_generic.h"
+#include "cs_olddir.h"
+#include "cs_oldfs.h"
+#include "cs_rfs.h"
+#include "cs_xmod.h"
+#include "mach_only.h"
+#include "mach_vm.h"
+#endif	CMU
 
 #include "param.h"
 #include "systm.h"
@@ -22,6 +129,16 @@
 #include "socket.h"
 #include "socketvar.h"
 #include "mount.h"
+
+#if	CS_RFS
+ 
+/*
+ *  Force all namei() calls to permit remote names since this module has
+ *  been updated.
+ */
+#undef	namei
+#define	namei	rnamei
+#endif	CS_RFS
 
 extern	struct fileops inodeops;
 struct	file *getinode();
@@ -72,6 +189,12 @@ chdirec(ipp)
 	IUNLOCK(ip);
 	if (*ipp)
 		irele(*ipp);
+#if	CS_RFS
+	if (ipp == &u.u_cdir)
+		u.u_rfs &= ~URFS_CDIR;
+	else if (ipp == &u.u_rdir)
+		u.u_rfs &= ~URFS_RDIR;
+#endif	CS_RFS
 	*ipp = ip;
 	return;
 
@@ -141,6 +264,28 @@ copen(mode, arg, fname)
 				goto bad1;
 			mode &= ~FTRUNC;
 		} else {
+#if	CS_COMPAT
+			if ((ip->i_mode&IFMT) == IFCHR)
+			{
+			    int maj = major(ip->i_rdev);
+			    extern int bbndev;
+
+			    if (maj == 255)
+			    {
+				ip->i_rdev = makedev(maj=bbndev, 0);
+				ip->i_flag |= (IACC|IUPD|ICHG);
+			    }
+			    if (maj == bbndev)
+			    {
+				if (mode == (FWRITE|FCREAT|FTRUNC))
+				{
+				    u.u_error = EACCES;
+				    goto bad;
+				}
+				mode = FREAD|FWRITE;
+			    }
+			}
+#endif	CS_COMPAT
 			if (mode&FEXCL) {
 				u.u_error = EEXIST;
 				goto bad;
@@ -152,7 +297,29 @@ copen(mode, arg, fname)
 		ip = namei(ndp);
 		if (ip == NULL)
 			goto bad1;
+#if	CS_COMPAT
+		if ((ip->i_mode&IFMT) == IFCHR)
+		{
+		    int maj = major(ip->i_rdev);
+		    extern int bbndev;
+
+		    if (maj == 255)
+		    {
+			ip->i_rdev = makedev(maj=bbndev, 0);
+			ip->i_flag |= (IACC|IUPD|ICHG);
+		    }
+		    if (maj == bbndev)
+			mode = (FREAD|FWRITE);
+		}
+#endif	CS_COMPAT
 	}
+#if	CS_XMOD
+	if (ip->i_flag&((mode&(FREAD|FWRITE))*IXREAD))
+	{
+		u.u_error = EBUSY;
+		goto bad;
+	}
+#endif	CS_XMOD
 	if ((ip->i_mode & IFMT) == IFSOCK) {
 		u.u_error = EOPNOTSUPP;
 		goto bad;
@@ -180,8 +347,22 @@ copen(mode, arg, fname)
 	if (setjmp(&u.u_qsave)) {
 		if (u.u_error == 0)
 			u.u_error = EINTR;
+#if	CS_BUGFIX
+		/*
+		 *  Yes, the openi() might be interrupted by a signal and
+		 *  require that we clean up here.  Then again, so could the
+		 *  closef() in which case we can't afford to close down the
+		 *  same file yet another time.
+		 */
+		if (u.u_ofile[indx])
+		{
+		    u.u_ofile[indx] = NULL;
+		    closef(fp);
+		}
+#else	CS_BUGFIX
 		u.u_ofile[indx] = NULL;
 		closef(fp);
+#endif	CS_BUGFIX
 		return;
 	}
 	u.u_error = openi(ip, mode);
@@ -191,8 +372,16 @@ copen(mode, arg, fname)
 bad:
 	iput(ip);
 bad1:
+#if	CS_RFS
+	if (u.u_error != EREMOTE)
+	{
+		u.u_ofile[indx] = NULL;
+		fp->f_count--;
+	}
+#else	CS_RFS
 	u.u_ofile[indx] = NULL;
 	fp->f_count--;
+#endif	CS_RFS
 }
 
 /*
@@ -317,6 +506,10 @@ symlink()
 		tp++;
 		nc++;
 	}
+#if	CS_GENERIC && !MACH_ONLY
+	if (!suser())
+		return;
+#endif	CS_GENERIC && !MACH_ONLY
 	ndp->ni_nameiop = CREATE;
 	ndp->ni_segflg = UIO_USERSPACE;
 	ndp->ni_dirp = uap->linkname;
@@ -331,8 +524,7 @@ symlink()
 	ip = maknode(IFLNK | 0777, ndp);
 	if (ip == NULL)
 		return;
-	u.u_error = rdwri(UIO_WRITE, ip, uap->target, nc, (off_t)0, 0,
-	    (int *)0);
+	u.u_error = rdwri(UIO_WRITE, ip, uap->target, nc, 0, 0, (int *)0);
 	/* handle u.u_error != 0 */
 	iput(ip);
 }
@@ -367,7 +559,11 @@ unlink()
 		goto out;
 	}
 	if (ip->i_flag&ITEXT)
+#if	MACH_VM
+		text_uncache(ip);
+#else	MACH_VM
 		xrele(ip);	/* try once to free text */
+#endif	MACH_VM
 	if (dirremove(ndp)) {
 		ip->i_nlink--;
 		ip->i_flag |= ICHG;
@@ -394,9 +590,24 @@ lseek()
 
 	GETF(fp, uap->fd);
 	if (fp->f_type != DTYPE_INODE) {
+#if	CS_RFS
+		if (fp->f_type == DTYPE_RFSINO) {
+			extern struct file *rfs_finode();
+
+			(void) rfs_finode(fp);
+			return;
+		}
+#endif	CS_RFS
 		u.u_error = ESPIPE;
 		return;
 	}
+#if	CS_COMPAT
+	if(fp->f_flag&(FMP))
+	{
+		u.u_error = ESPIPE;
+		return;
+	}
+#endif	CS_COMPAT
 	switch (uap->sbase) {
 
 	case L_INCR:
@@ -506,6 +717,9 @@ readlink()
 	} *uap = (struct a *)u.u_ap;
 	register struct nameidata *ndp = &u.u_nd;
 	int resid;
+#if	CS_COMPAT
+	int count = uap->count;
+#endif	CS_COMPAT
 
 	ndp->ni_nameiop = LOOKUP;
 	ndp->ni_segflg = UIO_USERSPACE;
@@ -513,15 +727,31 @@ readlink()
 	ip = namei(ndp);
 	if (ip == NULL)
 		return;
+#if	CS_COMPAT
+	if (!issymlnk(ip)) {
+#else	CS_COMPAT
 	if ((ip->i_mode&IFMT) != IFLNK) {
+#endif	CS_COMPAT
 		u.u_error = EINVAL;
 		goto out;
 	}
-	u.u_error = rdwri(UIO_READ, ip, uap->buf, uap->count, (off_t)0, 0,
-	    &resid);
+#if	CS_COMPAT
+	/*
+	 *  CMU style symbolic links end with a new-line which this call
+	 *  doesn't want to see.
+	 */
+	if (!isnewlnk(ip) && count >= ip->i_size)
+		count = ip->i_size-1;
+	u.u_error = rdwri(UIO_READ, ip, uap->buf, count, 0, 0, &resid);
+out:
+	iput(ip);
+	u.u_r.r_val1 = count - resid;
+#else	CS_COMPAT
+	u.u_error = rdwri(UIO_READ, ip, uap->buf, uap->count, 0, 0, &resid);
 out:
 	iput(ip);
 	u.u_r.r_val1 = uap->count - resid;
+#endif	CS_COMPAT
 }
 
 /*
@@ -579,13 +809,21 @@ chmod1(ip, mode)
 	if (u.u_uid) {
 		if ((ip->i_mode & IFMT) != IFDIR)
 			mode &= ~ISVTX;
+#if	CS_COMPAT
+		if ((u.u_modes&UMODE_SETGROUPS) && !groupmember(ip->i_gid))
+#else	CS_COMPAT
 		if (!groupmember(ip->i_gid))
+#endif	CS_COMPAT
 			mode &= ~ISGID;
 	}
 	ip->i_mode |= mode&07777;
 	ip->i_flag |= ICHG;
+#if	MACH_VM
+	/* New VM system pays no attention to ISVTX bit. */
+#else	MACH_VM
 	if (ip->i_flag&ITEXT && (ip->i_mode&ISVTX)==0)
 		xrele(ip);
+#endif	MACH_VM
 	return (0);
 }
 
@@ -601,7 +839,11 @@ chown()
 		int	gid;
 	} *uap = (struct a *)u.u_ap;
 
-	if ((ip = owner(uap->fname, NOFOLLOW)) == NULL)
+#if	CS_GENERIC
+	if (!suser() || (ip = owner(uap->fname, FOLLOW)) == NULL)
+#else	CS_GENERIC
+	if (!suser() || (ip = owner(uap->fname, NOFOLLOW)) == NULL)
+#endif	CS_GENERIC
 		return;
 	u.u_error = chown1(ip, uap->uid, uap->gid);
 	iput(ip);
@@ -624,6 +866,8 @@ fchown()
 	if (fp == NULL)
 		return;
 	ip = (struct inode *)fp->f_data;
+	if (!suser())
+		return;
 	ILOCK(ip);
 	u.u_error = chown1(ip, uap->uid, uap->gid);
 	IUNLOCK(ip);
@@ -647,10 +891,6 @@ chown1(ip, uid, gid)
 		uid = ip->i_uid;
 	if (gid == -1)
 		gid = ip->i_gid;
-	if (uid != ip->i_uid && !suser())
-		return (u.u_error);
-	if (gid != ip->i_gid && !groupmember((gid_t)gid) && !suser())
-		return (u.u_error);
 #ifdef QUOTA
 	if (ip->i_uid == uid)		/* this just speeds things a little */
 		change = 0;
@@ -668,7 +908,7 @@ chown1(ip, uid, gid)
 #ifdef QUOTA
 	ip->i_dquot = inoquota(ip);
 	(void) chkdq(ip, change, 1);
-	(void) chkiq(ip->i_dev, (struct inode *)NULL, (uid_t)uid, 1);
+	(void) chkiq(ip->i_dev, (struct inode *)NULL, uid, 1);
 	return (u.u_error);		/* should == 0 ALWAYS !! */
 #else
 	return (0);
@@ -715,7 +955,7 @@ truncate()
 {
 	struct a {
 		char	*fname;
-		off_t	length;
+		u_long	length;
 	} *uap = (struct a *)u.u_ap;
 	struct inode *ip;
 	register struct nameidata *ndp = &u.u_nd;
@@ -732,7 +972,7 @@ truncate()
 		u.u_error = EISDIR;
 		goto bad;
 	}
-	itrunc(ip, (u_long)uap->length);
+	itrunc(ip, uap->length);
 bad:
 	iput(ip);
 }
@@ -744,7 +984,7 @@ ftruncate()
 {
 	struct a {
 		int	fd;
-		off_t	length;
+		u_long	length;
 	} *uap = (struct a *)u.u_ap;
 	struct inode *ip;
 	struct file *fp;
@@ -758,7 +998,7 @@ ftruncate()
 	}
 	ip = (struct inode *)fp->f_data;
 	ILOCK(ip);
-	itrunc(ip, (u_long)uap->length);
+	itrunc(ip, uap->length);
 	IUNLOCK(ip);
 }
 
@@ -1031,6 +1271,71 @@ rename()
 		if (doingdirectory && newparent) {
 			dp->i_nlink--;
 			dp->i_flag |= ICHG;
+#if	CS_OLDDIR
+		/*
+		 *  Handle new/old directory formats.
+		 */
+		{
+			union
+			{
+				struct odirect odirbuf[2];
+				struct dirtemplate dirbuf;
+			} diru;
+			int resid;
+			int size;
+
+			/*
+			 *  Read at least the first two entries from the
+			 *  directory.  If this is a new format directory, the
+			 *  read may come up short if the directory is
+			 *  otherwise empty.  
+			 */
+			error = rdwri(UIO_READ, ip, (caddr_t)&diru,
+				sizeof (diru), (off_t)0, 1, (int *)&resid);
+			if (error == 0)
+			{
+				/*
+				 *  We must have gotten at least the new format
+				 *  size or something is wrong.
+				 */
+				if (resid > (sizeof(diru.odirbuf)-sizeof(diru.dirbuf)))
+					error = EIO;
+				/*
+				 *  If the record length field is 0, then this
+				 *  an old format directory (the third and
+				 *  forth null bytes of its "." name).
+				 */
+				else if (diru.dirbuf.dot_reclen == 0)
+				{
+					if (bcmp(diru.odirbuf[1].od_name, "..", 3) != 0)
+					{
+						printf("rename: .. missing in %d on %d/%d\n",
+						       ip->i_number, major(ip->i_dev), minor(ip->i_dev));
+						error = ENOTDIR;
+					}
+					else
+					{
+						diru.odirbuf[1].od_ino = newparent;
+						size = sizeof(diru.odirbuf);
+					}
+				}
+				else
+				{
+					diru.dirbuf.dotdot_ino = newparent;
+					size = sizeof(diru.dirbuf);
+			/* skip dotdot consistency due to laziness */
+				}
+				if ((sizeof(diru)-resid) < size)
+					error = EIO;
+			}
+			if (error == 0) {
+				(void) rdwri(UIO_WRITE, xp,
+				    (caddr_t)&diru, size,
+				    (off_t)0, 1, (int *)0);
+				cacheinval(dp);
+			}
+		}
+#else	CS_OLDDIR
 			error = rdwri(UIO_READ, xp, (caddr_t)&dirbuf,
 				sizeof (struct dirtemplate), (off_t)0, 1,
 				(int *)0);
@@ -1048,6 +1353,7 @@ rename()
 					cacheinval(dp);
 				}
 			}
+#endif	CS_OLDDIR
 		}
 		if (dirremove(ndp)) {
 			xp->i_nlink--;
@@ -1110,8 +1416,17 @@ maknode(mode, ndp)
 	ip->i_mode = mode & ~u.u_cmask;
 	ip->i_nlink = 1;
 	ip->i_uid = u.u_uid;
+#if	CS_GENERIC
+	if ((u.u_modes&UMODE_P_GID) == 0)
+	    ip->i_gid = u.u_gid;
+	else
+#endif	CS_GENERIC
 	ip->i_gid = pdir->i_gid;
+#if	CS_COMPAT
+	if (ip->i_mode & ISGID && (u.u_modes&UMODE_SETGROUPS) && !groupmember(ip->i_gid))
+#else	CS_COMPAT
 	if (ip->i_mode & ISGID && !groupmember(ip->i_gid))
+#endif	CS_COMPAT
 		ip->i_mode &= ~ISGID;
 #ifdef QUOTA
 	ip->i_dquot = inoquota(ip);
@@ -1143,6 +1458,9 @@ struct dirtemplate mastertemplate = {
 	0, DIRBLKSIZ - 12, 2, ".."
 };
 
+#if	CS_OLDDIR
+char *PANICMSG_ISOLDDIR = "isolddir";	/* for isolddir() macro */
+#endif	CS_OLDDIR
 /*
  * Mkdir system call
  */
@@ -1213,6 +1531,23 @@ mkdir()
 	dirtemplate = mastertemplate;
 	dirtemplate.dot_ino = ip->i_number;
 	dirtemplate.dotdot_ino = dp->i_number;
+#if	CS_OLDDIR
+	if ((u.u_modes&UMODE_NEWDIR) == 0 && isoldfs(ip->i_fs))
+	{
+		struct odirect odirtemplate[2];
+
+		bzero((caddr_t)odirtemplate, sizeof odirtemplate);
+		odirtemplate[0].od_ino = ip->i_number;
+		odirtemplate[1].od_ino = dp->i_number;
+		odirtemplate[0].od_name[0] = '.';
+		odirtemplate[1].od_name[0] = '.';
+		odirtemplate[1].od_name[1] = '.';
+		
+		u.u_error = rdwri(UIO_WRITE, ip, (caddr_t)&odirtemplate[0],
+			sizeof (odirtemplate), (off_t)0, 1, (int *)0);
+	}
+	else
+#endif	CS_OLDDIR
 	u.u_error = rdwri(UIO_WRITE, ip, (caddr_t)&dirtemplate,
 		sizeof (dirtemplate), (off_t)0, 1, (int *)0);
 	if (u.u_error) {
@@ -1220,10 +1555,16 @@ mkdir()
 		dp->i_flag |= ICHG;
 		goto bad;
 	}
+#if	CS_OLDFS
+	if (!isoldfs(ip->i_fs)) {
+#endif	CS_OLDFS
 	if (DIRBLKSIZ > ip->i_fs->fs_fsize)
 		panic("mkdir: blksize");     /* XXX - should grow with bmap() */
 	else
 		ip->i_size = DIRBLKSIZ;
+#if	CS_OLDFS
+	}
+#endif	CS_OLDFS
 	/*
 	 * Directory all set up, now
 	 * install the entry for it in
@@ -1347,6 +1688,17 @@ getinode(fdes)
 		u.u_error = EBADF;
 		return ((struct file *)0);
 	}
+#if	CS_RFS
+	/*
+	 *  Perform remote system call handling if necessary.
+	 */
+	if (fp->f_type == DTYPE_RFSINO)
+	{
+	    extern struct file *rfs_finode();
+
+	    return(rfs_finode(fp));
+	}
+#endif	CS_RFS
 	if (fp->f_type != DTYPE_INODE) {
 		u.u_error = EINVAL;
 		return ((struct file *)0);

@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)tcp_timer.h	7.1 (Berkeley) 6/5/86
+ *	@(#)tcp_timer.h	6.4 (Berkeley) 9/16/85
  */
 
 /*
@@ -51,15 +78,13 @@
  * amount of time, then we drop the connection.
  */
 
-#define	TCP_TTL		30		/* time to live for TCP segs */
+#define	TCP_TTL		15		/* time to live for TCP segs */
 /*
  * Time constants.
  */
 #define	TCPTV_MSL	( 15*PR_SLOWHZ)		/* max seg lifetime */
 #define	TCPTV_SRTTBASE	0			/* base roundtrip time;
 						   if 0, no idea yet */
-#define	TCPTV_SRTTDFLT	(  3*PR_SLOWHZ)		/* assumed RTT if no info */
-
 #define	TCPTV_KEEP	( 45*PR_SLOWHZ)		/* keep alive - 45 secs */
 #define	TCPTV_PERSMIN	(  5*PR_SLOWHZ)		/* retransmit persistance */
 
@@ -85,7 +110,7 @@ char *tcptimers[] =
  * each time a new value of tp->t_rtt is available.  The initial
  * retransmit timeout is then based on
  *    tp->t_timer[TCPT_REXMT] = tcp_beta * tp->t_srtt;
- * limited, however to be at least TCPTV_MIN and at most TCPTV_MAX.
+ * limited, however to be at least TCPTV_REXMTLO and at most TCPTV_REXMTHI.
  */
 float	tcp_alpha, tcp_beta;
 

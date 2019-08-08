@@ -1,13 +1,39 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)if_ec.c	7.1 (Berkeley) 6/5/86
+ *	@(#)if_ec.c	6.12 (Berkeley) 9/16/85
  */
 
 #include "ec.h"
-#if NEC > 0
 
 /*
  * 3Com Ethernet Controller interface
@@ -20,7 +46,6 @@
 #include "buf.h"
 #include "protosw.h"
 #include "socket.h"
-#include "syslog.h"
 #include "vmmac.h"
 #include "ioctl.h"
 #include "errno.h"
@@ -29,6 +54,9 @@
 #include "../net/netisr.h"
 #include "../net/route.h"
 
+#ifdef	BBNNET
+#define	INET
+#endif
 #ifdef INET
 #include "../netinet/in.h"
 #include "../netinet/in_systm.h"
@@ -36,6 +64,10 @@
 #include "../netinet/ip.h"
 #include "../netinet/if_ether.h"
 #endif
+
+#ifdef PUP
+#include "../netpup/pup.h"
+#endif PUP
 
 #ifdef NS
 #include "../netns/ns.h"
@@ -85,6 +117,17 @@ struct	ec_softc {
 	short	es_oactive;		/* is output active? */
 	u_char	*es_buf[16];		/* virtual addresses of buffers */
 } ec_softc[NEC];
+
+#ifdef DEBUG
+ether_addr(s)
+char *s;
+{
+
+	printf("%x:%x:%x:%x:%x:%x\n",
+		s[0]&0xff, s[1]&0xff, s[2]&0xff,
+		s[3]&0xff, s[4]&0xff, s[5]&0xff);
+}
+#endif
 
 /*
  * Configure on-board memory for an interface.
@@ -222,8 +265,10 @@ ecattach(ui)
 		}
 		cp++;
 	}
-	printf("ec%d: hardware address %s\n", ui->ui_unit,
-		ether_sprintf(es->es_addr));
+#ifdef DEBUG
+	printf("ecattach %d: addr=",ui->ui_unit);
+	ether_addr(es->es_addr);
+#endif
 	ifp->if_init = ecinit;
 	ifp->if_ioctl = ecioctl;
 	ifp->if_output = ecoutput;
@@ -280,11 +325,11 @@ ecinit(unit)
 		 * write our ethernet address into the address recognition ROM 
 		 * so we can always use the same EC_READ bits (referencing ROM),
 		 * in case we change the address sometime.
-		 * Note that this is safe here as the receiver is NOT armed.
+		 * Note that this is safe here as the reciever is NOT armed.
 		 */
 		ec_setaddr(es->es_addr, unit);
 		/*
-		 * Arm the receiver
+		 * Arm the reciever
 		 */
 		for (i = ECRHBF; i >= ECRLBF; i--)
 			addr->ec_rcr = EC_READ | i;
@@ -298,22 +343,30 @@ ecinit(unit)
 }
 
 /*
- * Start output on interface.  Get another datagram to send
- * off of the interface queue, and copy it to the interface
+ * Start or restart output on interface.
+ * If interface is already active, then this is a retransmit
+ * after a collision, and just restuff registers.
+ * If interface is not already active, get another datagram
+ * to send off of the interface queue, and map it to the interface
  * before starting the output.
  */
 ecstart(unit)
 {
-	register struct ec_softc *es = &ec_softc[unit];
+	struct ec_softc *es = &ec_softc[unit];
 	struct ecdevice *addr;
 	struct mbuf *m;
 
-	if ((es->es_if.if_flags & IFF_RUNNING) == 0)
-		return;
+	if (es->es_oactive)
+		goto restart;
+
 	IF_DEQUEUE(&es->es_if.if_snd, m);
-	if (m == 0)
+	if (m == 0) {
+		es->es_oactive = 0;
 		return;
+	}
 	ecput(es->es_buf[ECTBF], m);
+
+restart:
 	addr = (struct ecdevice *)ecinfo[unit]->ui_addr;
 	addr->ec_xcr = EC_WRITE|ECTBF;
 	es->es_oactive = 1;
@@ -355,15 +408,21 @@ ecxint(unit)
 eccollide(unit)
 	int unit;
 {
+	struct ec_softc *es = &ec_softc[unit];
+
+	es->es_if.if_collisions++;
+	if (es->es_oactive)
+		ecdocoll(unit);
+}
+
+ecdocoll(unit)
+	int unit;
+{
 	register struct ec_softc *es = &ec_softc[unit];
 	register struct ecdevice *addr =
 	    (struct ecdevice *)ecinfo[unit]->ui_addr;
 	register i;
 	int delay;
-
-	es->es_if.if_collisions++;
-	if (es->es_oactive == 0)
-		return;
 
 	/*
 	 * Es_mask is a 16 bit number with n low zero bits, with
@@ -372,7 +431,7 @@ eccollide(unit)
 	 */
 	if (es->es_mask == 0) {
 		es->es_if.if_oerrors++;
-		log(LOG_ERR, "ec%d: send error\n", unit);
+		printf("ec%d: send error\n", unit);
 		/*
 		 * Reset interface, then requeue rcv buffers.
 		 * Some incoming packets may be lost, but that
@@ -392,14 +451,13 @@ eccollide(unit)
 	}
 	/*
 	 * Do exponential backoff.  Compute delay based on low bits
-	 * of the interval timer (1 bit for each transmission attempt,
-	 * but at most 5 bits).  Then delay for that number of
+	 * of the interval timer.  Then delay for that number of
 	 * slot times.  A slot time is 51.2 microseconds (rounded to 51).
 	 * This does not take into account the time already used to
 	 * process the interrupt.
 	 */
 	es->es_mask <<= 1;
-	delay = mfpr(ICR) & 0x1f &~ es->es_mask;
+	delay = mfpr(ICR) &~ es->es_mask;
 	DELAY(delay * 51);
 	/*
 	 * Clear the controller's collision flag, thus enabling retransmit.
@@ -554,25 +612,21 @@ ecoutput(ifp, m0, dst)
 	register struct ether_header *ec;
 	register int off;
 	struct mbuf *mcopy = (struct mbuf *)0;
-	int usetrailers;
 
-	if ((ifp->if_flags & (IFF_UP|IFF_RUNNING)) != (IFF_UP|IFF_RUNNING)) {
-		error = ENETDOWN;
-		goto bad;
-	}
 	switch (dst->sa_family) {
 
 #ifdef INET
 	case AF_INET:
 		idst = ((struct sockaddr_in *)dst)->sin_addr;
-		if (!arpresolve(&es->es_ac, m, &idst, edst, &usetrailers))
+		if (!arpresolve(&es->es_ac, m, &idst, edst))
 			return (0);	/* if not yet resolved */
 		if (!bcmp((caddr_t)edst, (caddr_t)etherbroadcastaddr,
 		    sizeof(edst)))
 			mcopy = m_copy(m, 0, (int)M_COPYALL);
 		off = ntohs((u_short)mtod(m, struct ip *)->ip_len) - m->m_len;
 		/* need per host negotiation */
-		if (usetrailers && off > 0 && (off & 0x1ff) == 0 &&
+		if ((ifp->if_flags & IFF_NOTRAILERS) == 0)
+		if (off > 0 && (off & 0x1ff) == 0 &&
 		    m->m_off >= MMINOFF + 2 * sizeof (u_short)) {
 			type = ETHERTYPE_TRAIL + (off>>9);
 			m->m_off -= 2 * sizeof (u_short);
@@ -764,11 +818,16 @@ ecget(ecbuf, totlen, off0, ifp)
 		if (ifp)
 			len += sizeof(ifp);
 		if (len >= NBPG) {
-			MCLGET(m);
-			if (m->m_len == CLBYTES)
+			struct mbuf *p;
+
+			MCLGET(p, 1);
+			if (p != 0) {
 				m->m_len = len = MIN(len, CLBYTES);
-			else
+				m->m_off = (int)p - (int)m;
+			} else {
 				m->m_len = len = MIN(MLEN, len);
+				m->m_off = MMINOFF;
+			}
 		} else {
 			m->m_len = len = MIN(MLEN, len);
 			m->m_off = MMINOFF;
@@ -824,11 +883,7 @@ ecioctl(ifp, cmd, data)
 	caddr_t data;
 {
 	register struct ifaddr *ifa = (struct ifaddr *)data;
-	struct ec_softc *es = &ec_softc[ifp->if_unit];
-	struct ecdevice *addr;
 	int s = splimp(), error = 0;
-
-	addr = (struct ecdevice *)(ecinfo[ifp->if_unit]->ui_addr);
 
 	switch (cmd) {
 
@@ -838,7 +893,7 @@ ecioctl(ifp, cmd, data)
 		switch (ifa->ifa_addr.sa_family) {
 #ifdef INET
 		case AF_INET:
-			ecinit(ifp->if_unit);	/* before arpwhohas */
+			ecinit(ifp->if_unit); /* before, so we can send the ARP packet */
 			((struct arpcom *)ifp)->ac_ipaddr =
 				IA_SIN(ifa)->sin_addr;
 			arpwhohas((struct arpcom *)ifp, &IA_SIN(ifa)->sin_addr);
@@ -849,36 +904,26 @@ ecioctl(ifp, cmd, data)
 		    {
 			register struct ns_addr *ina = &(IA_SNS(ifa)->sns_addr);
 
-			if (ns_nullhost(*ina))
-				ina->x_host = *(union ns_host *)(es->es_addr);
-			else {
+			if (ns_nullhost(*ina)) {
+				ina->x_host = * (union ns_host *) 
+				     (ec_softc[ifp->if_unit].es_addr);
+			} else {
 				/* 
 				 * The manual says we can't change the address 
-				 * while the receiver is armed,
-				 * so reset everything
+				 * while the reciever is armed so reset everything
 				 */
-				ifp->if_flags &= ~IFF_RUNNING; 
-				bcopy((caddr_t)ina->x_host.c_host,
-				    (caddr_t)es->es_addr, sizeof(es->es_addr));
+				struct ec_softc *es = &ec_softc[ifp->if_unit];
+				struct uba_device *ui = ecinfo[ifp->if_unit];
+				struct ecdevice *addr = (struct ecdevice *)ui->ui_addr;
+				
+				es->es_if.if_flags &= ~IFF_RUNNING; 
+				bcopy(ina->x_host.c_host, es->es_addr, sizeof(es->es_addr));
 			}
 			ecinit(ifp->if_unit); /* does ec_setaddr() */
 			break;
 		    }
 #endif
-		default:
-			ecinit(ifp->if_unit);
-			break;
 		}
-		break;
-
-	case SIOCSIFFLAGS:
-		if ((ifp->if_flags & IFF_UP) == 0 &&
-		    ifp->if_flags & IFF_RUNNING) {
-			addr->ec_xcr = EC_UECLR;
-			ifp->if_flags &= ~IFF_RUNNING;
-		} else if (ifp->if_flags & IFF_UP &&
-		    (ifp->if_flags & IFF_RUNNING) == 0)
-			ecinit(ifp->if_unit);
 		break;
 
 	default:
@@ -889,8 +934,8 @@ ecioctl(ifp, cmd, data)
 }
 
 ec_setaddr(physaddr,unit)
-	u_char *physaddr;
-	int unit;
+u_char *physaddr;
+int unit;
 {
 	struct ec_softc *es = &ec_softc[unit];
 	struct uba_device *ui = ecinfo[unit];
@@ -900,13 +945,14 @@ ec_setaddr(physaddr,unit)
 
 	/*
 	 * Use the ethernet address supplied
-	 * Note that we do a UECLR here, so the receive buffers
+	 * NOte that we do a UECLR here, so the recieve buffers
 	 * must be requeued.
 	 */
 	
 #ifdef DEBUG
-	printf("ec_setaddr: setting address for unit %d = %s",
-		unit, ether_sprintf(physaddr));
+	printf("ec_setaddr: setting address for unit %d = ",
+		unit);
+	ether_addr(physaddr); 
 #endif
 	addr->ec_xcr = EC_UECLR;
 	addr->ec_rcr = 0;
@@ -949,8 +995,7 @@ ec_setaddr(physaddr,unit)
 		}
 		cp++;
 	}
-	printf("ec_setaddr: RAM address for unit %d = %s",
-		unit, ether_sprintf(physaddr));
+	printf("ec_setaddr %d: ROM addr=",ui->ui_unit);
+	ether_addr(es->es_addr);
 #endif
 }
-#endif

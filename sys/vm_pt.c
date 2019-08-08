@@ -1,10 +1,66 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)vm_pt.c	7.1 (Berkeley) 6/5/86
+ *	@(#)vm_pt.c	6.4 (Berkeley) 6/8/85
  */
+#if	CMU
+
+/*
+ * HISTORY
+ * 22-Mar-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Merged VM and Romp versions.  Made the splhigh change
+ *	conditional on CS_GENERIC.
+ *
+ *  6-Mar-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Changed spl7() to splhigh().
+ *
+ * 17-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Merged in IBM code for Sailboat under switch ROMP.
+ *
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 10-Sep-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Updated for master/slave operation.
+ *
+ */
+
+#include "cs_generic.h"
+#include "mach_mp.h"
+#include "mach_vm.h"
+#endif	CMU
+
+#if	MACH_VM
+#else	MACH_VM
 
 #include "param.h"
 #include "systm.h"
@@ -25,8 +81,9 @@
 #ifdef vax
 #include "../vax/mtpr.h"
 #endif
-
-
+#ifdef	romp
+#include "../machine/rosetta.h"
+#endif	romp
 
 /*
  * Get page tables for process p.  Allocator
@@ -123,18 +180,22 @@ vinitpt(p)
 		vinifod((struct fpte *)tptopte(p, 0), PG_FTEXT, xp->x_iptr,
 		    (daddr_t)1, xp->x_size);
 	else
-		(void)swap(p, xp->x_ptdaddr, (caddr_t)tptopte(p, 0),
-		    (int)xp->x_size * sizeof (struct pte), B_READ,
+		swap(p, xp->x_ptdaddr, (caddr_t)tptopte(p, 0),
+		    xp->x_size * sizeof (struct pte), B_READ,
 		    B_PAGET, swapdev, 0);
 done:
 	/*
 	 * In the case where we are overlaying ourself with new page
 	 * table entries, old user-space translations should be flushed.
 	 */
+#ifndef	romp
 	if (p == u.u_procp)
-		newptes(tptopte(p, 0), tptov(p, 0), (int)xp->x_size);
+		newptes(tptopte(p, 0), tptov(p, 0), xp->x_size);
 	else
 		p->p_flag |= SPTECHG;
+#else	romp
+	return;  /*this spurious return is to keep the compiler from barfing*/
+#endif	romp
 }
 
 /*
@@ -147,7 +208,7 @@ done:
  */
 distpte(xp, tp, dpte)
 	struct text *xp;
-	register unsigned tp;
+	register size_t tp;
 	register struct pte *dpte;
 {
 	register struct proc *p;
@@ -204,10 +265,29 @@ vpasspt(p, q, up, uq, umap)
 	struct pte *tp;
 	register int i;
 
+#if	CS_GENERIC
 	s = splhigh();	/* conservative, and slightly paranoid */
+#else	CS_GENERIC
+	s = spl7();	/* conservative, and slightly paranoid */
+#endif	CS_GENERIC
 	Xu(pcb_szpt); Xu(pcb_p0lr); Xu(pcb_p1lr);
 	Xup(pcb_p0br); Xup(pcb_p1br);
 
+#ifdef	romp
+/* Following code added 5/84 by	JEC for	romp.	Switch the SID's of
+* processes p and q.  The 1st proc addr passed it is assumed to be
+* the running process.  The fields for SID's in the proc struct are
+* swapped, and the per process seg regs are reloaded.  The uarea's
+* of p and q are also swapped, so that each process retains its
+* own ustruct and stacks.
+*/
+
+	if (up == &u)
+		swap_sids(p, q);
+	else
+		swap_sids(q, p);
+
+#endif	romp
 	/*
 	 * The u. area is contained in the process' p1 region.
 	 * Thus we map the current u. area into the process virtual space
@@ -306,31 +386,54 @@ vgetu(p, palloc, map, newu, oldu)
 {
 	register int i;
 
+#ifndef	romp
 	if ((*palloc)(p->p_addr, clrnd(UPAGES), p, CSYS) == 0)
+#else	romp
+	if ((*palloc)(p->p_addr, clrnd(UPAGES), p, CUSTRUCT) == 0)
+#endif	romp
 		return (0);
 	/*
 	 * New u. pages are to be accessible in map/newu as well
 	 * as in process p's virtual memory.
 	 */
 	for (i = 0; i < UPAGES; i++) {
+#ifndef	romp
 		map[i] = p->p_addr[i];
 		*(int *)(p->p_addr + i) |= PG_URKW | PG_V;
+#else	romp
+		*(int *)(p->p_addr + i) |= PG_URKW | PG_V;
+		map[i] = p->p_addr[i];
+#endif	romp
 	}
 	setredzone(p->p_addr, (caddr_t)0);
+#ifndef	romp
 	vmaccess(map, (caddr_t)newu, UPAGES);
+#else	romp
+	vmaccess(map, uareabase(newu), UPAGES);
+#endif	romp
 	/*
 	 * New u.'s come from forking or inswap.
 	 */
 	if (oldu) {
+#ifndef	romp
 		bcopy((caddr_t)oldu, (caddr_t)newu, UPAGES * NBPG);
+#else	romp
+		bcopy(uareabase(oldu), uareabase(newu), UPAGES*NBPG);
+#endif	romp
 		newu->u_procp = p;
 	} else {
-		(void)swap(p, p->p_swaddr, (caddr_t)0, ctob(UPAGES),
+		swap(p, p->p_swaddr, (caddr_t)0, ctob(UPAGES),
 		   B_READ, B_UAREA, swapdev, 0);
 		if (
+#if	MACH_MP
+#ifdef	vax
+		    newu->u_pcb.pcb_ssp != -1 ||
+#endif	vax
+#else	MACH_MP
 #ifdef vax
 		    newu->u_pcb.pcb_ssp != -1 || newu->u_pcb.pcb_esp != -1 ||
 #endif
+#endif	MACH_MP
 		    newu->u_tsize != p->p_tsize || newu->u_dsize != p->p_dsize ||
 		    newu->u_ssize != p->p_ssize || newu->u_procp != p)
 			panic("vgetu");
@@ -371,6 +474,9 @@ vgetswu(p, utl)
 
 /*
  * Release u. area, swapping it out if desired.
+ *
+ * Note: we run on the old u. after it is released into swtch(),
+ * and are safe because nothing can happen at interrupt time.
  */
 vrelu(p, swapu)
 	register struct proc *p;
@@ -379,18 +485,10 @@ vrelu(p, swapu)
 	struct pte uu[UPAGES];
 
 	if (swapu)
-		(void)swap(p, p->p_swaddr, (caddr_t)0, ctob(UPAGES),
+		swap(p, p->p_swaddr, (caddr_t)0, ctob(UPAGES),
 		    B_WRITE, B_UAREA, swapdev, 0);
 	for (i = 0; i < UPAGES; i++)
 		uu[i] = p->p_addr[i];
-	/*
-	 * If freeing the user structure and kernel stack
-	 * for the current process, have to run a bit longer
-	 * using the pages which have already been freed...
-	 * block memory allocation from the network by raising ipl.
-	 */
-	if (p == u.u_procp)
-		(void) splimp();		/* XXX */
 	(void) vmemfree(uu, clrnd(UPAGES));
 }
 
@@ -454,9 +552,14 @@ top:
 	p1 = &Usrptmap[i];
 	p2 = p1 + change;
 	while (p1 < p2) {
+#ifndef	romp
 		/* tptov BELOW WORKS ONLY FOR VAX */
 		mapin(p1, tptov(u.u_procp, i), p1->pg_pfnum, 1,
 		    (int)(PG_V|PG_KW));
+#else	romp
+		mapin(p1, btop(kmxtob(i)),
+			PG_V | PG_KW | (*(unsigned *)p1), 1);
+#endif	romp
 		clearseg(p1->pg_pfnum);
 		p1++;
 		i++;
@@ -473,7 +576,13 @@ top:
 	 */
 	p1 = u.u_pcb.pcb_p1br + u.u_pcb.pcb_p1lr;
 	p2 = initp1br(kmxtob(knew+szpt+change)) + u.u_pcb.pcb_p1lr;
+#ifndef	romp
 	for (i = kmxtob(kold+szpt) - p1; i != 0; i--)
+#else	romp
+	/* OOPS, pages at kold were remapped at knew! */
+	p1 = (p1 - kmxtob(kold)) + kmxtob(knew);
+	for (i = kmxtob(knew+szpt) - p1; i != 0; i--)
+#endif	romp
 		*p2++ = *p1++;
 
 	/*
@@ -482,7 +591,11 @@ top:
 #ifdef vax
 	mtpr(TBIA, 0);	/* paranoid */
 #endif
+#if	CS_GENERIC
 	s = splhigh();	/* conservative */
+#else	CS_GENERIC
+	s = spl7();	/* conservative */
+#endif	CS_GENERIC
 	u.u_procp->p_p0br = kmxtob(knew);
 	setp0br(u.u_procp->p_p0br);
 	u.u_pcb.pcb_p1br = initp1br(kmxtob(knew+szpt+change));
@@ -510,7 +623,15 @@ bad:
 	 * When resume is executed for the process, 
 	 * here is where it will resume.
 	 */
+#if	MACH_MP
+	unix_resume(u.u_procp);
+#else	MACH_MP
+#ifndef	romp
 	resume(pcbb(u.u_procp));
+#else	romp
+	resume(u.u_procp);
+#endif	romp
+#endif	MACH_MP
 	if (savectx(&u.u_ssave))
 		return;
 	if (swapout(u.u_procp, ods, oss) == 0) {
@@ -531,8 +652,12 @@ bad:
 	 * return from the savectx() above.
 	 */
 	u.u_procp->p_flag |= SSWAP;
+#if	MACH_MP
+	unix_swtch(0, 0);
+#else	MACH_MP
 	swtch();
-	/* NOTREACHED */
+#endif	MACH_MP
+	/* no return */
 }
 
 kmcopy(to, from, count)
@@ -544,11 +669,19 @@ kmcopy(to, from, count)
 	register struct pte *fp = &Usrptmap[from];
 
 	while (count != 0) {
+#ifndef	romp
 		mapin(tp, tptov(u.u_procp, to), fp->pg_pfnum, 1,
 		    (int)(*((int *)fp) & (PG_V|PG_PROT)));
+#else	romp
+		/* Have to map out the old page first! */
+		mapout(fp, 1); /* I hope he doesn't mess with the pte */
+		mapin(tp, btop(kmxtob(to)),
+		      (PG_V|PG_PROT|PG_PFNUM) & (*(unsigned *)fp), 1);
+#endif	romp
 		tp++;
 		fp++;
 		to++;
 		count--;
 	}
 }
+#endif	MACH_VM

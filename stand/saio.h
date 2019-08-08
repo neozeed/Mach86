@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)saio.h	7.1 (Berkeley) 6/5/86
+ *	@(#)saio.h	6.3 (Berkeley) 6/8/85
  */
 
 /*
@@ -42,7 +69,9 @@ struct	iob {
 #define F_ALLOC		0x4	/* buffer allocated */
 #define F_FILE		0x8	/* file instead of device */
 #define F_NBSF		0x10	/* no bad sector forwarding */
+#define F_ECCLM		0x20	/* limit # of bits in ecc correction */
 #define F_SSI		0x40	/* set skip sector inhibit */
+#define F_SEVRE		0x80	/* Severe burnin (no retries, no ECC) */
 /* io types */
 #define	F_RDDATA	0x0100	/* read data */
 #define	F_WRDATA	0x0200	/* write data */
@@ -113,11 +142,17 @@ extern	int errno;	/* just like unix */
 #define	SAIOHCHECK	(('d'<<8)|3)	/* next i/o checks header & data */
 #define	SAIONOBAD	(('d'<<8)|4)	/* inhibit bad sector forwarding */
 #define	SAIODOBAD	(('d'<<8)|5)	/* enable bad sector forwarding */
-#define	SAIOECCLIM	(('d'<<8)|6)	/* set limit to ecc correction, bits */
-#define	SAIORETRIES	(('d'<<8)|7)	/* set retry count for unit */
+#define	SAIOECCLIM	(('d'<<8)|6)	/* limit ecc correction to 5 bits */
+#define	SAIOECCUNL	(('d'<<8)|7)	/* use standard ecc procedures */
 #define	SAIODEVDATA	(('d'<<8)|8)	/* get device data */
 #define	SAIOSSI		(('d'<<8)|9)	/* set skip sector inhibit */
 #define	SAIONOSSI	(('d'<<8)|10)	/* inhibit skip sector handling */
 #define	SAIOSSDEV	(('d'<<8)|11)	/* is device skip sector type? */
 #define	SAIODEBUG	(('d'<<8)|12)	/* enable/disable debugging */
-#define	SAIOGBADINFO	(('d'<<8)|13)	/* get bad-sector table */
+#define	SAIOSEVRE	(('d'<<8)|13)	/* severe burnin, no ECC, no retries */
+#define	SAIONSEVRE	(('d'<<8)|14)	/* clear severe burnin */
+
+/* codes for sector header word 1 */
+#define	HDR1_FMT22	0x1000	/* standard 16 bit format */
+#define	HDR1_OKSCT	0xc000	/* sector ok */
+#define	HDR1_SSF	0x2000	/* skip sector flag */

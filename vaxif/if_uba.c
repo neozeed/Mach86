@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)if_uba.c	7.1 (Berkeley) 6/5/86
+ *	@(#)if_uba.c	6.6 (Berkeley) 9/16/85
  */
 
 #include "../machine/pte.h"
@@ -16,7 +43,6 @@
 #include "cmap.h"
 #include "vmmac.h"
 #include "socket.h"
-#include "syslog.h"
 
 #include "../net/if.h"
 
@@ -59,7 +85,7 @@ if_ubaminit(ifu, uban, hlen, nmr, ifr, nr, ifw, nw)
 	if (ifr[0].ifrw_addr)
 		cp = ifr[0].ifrw_addr - off;
 	else {
-		cp = m_clalloc((nr + nw) * ncl, MPG_SPACE, M_DONTWAIT);
+		cp = m_clalloc((nr + nw) * ncl, MPG_SPACE);
 		if (cp == 0)
 			return (0);
 		p = cp;
@@ -91,8 +117,6 @@ if_ubaminit(ifu, uban, hlen, nmr, ifr, nr, ifw, nw)
 		for (i = 0; i < nmr; i++)
 			ifw[nw].ifw_wmap[i] = ifw[nw].ifw_mr[i];
 		ifw[nw].ifw_xswapd = 0;
-		ifw[nw].ifw_flags = IFRW_W;
-		ifw[nw].ifw_nmr = nmr;
 	}
 	return (1);
 bad:
@@ -142,10 +166,6 @@ if_ubaalloc(ifu, ifrw, nmr)
  * easily by remapping, and take advantage of this here.
  * Prepend a pointer to the interface structure,
  * so that protocols can determine where incoming packets arrived.
- * Note: we may be called to receive from a transmit buffer by some
- * devices.  In that case, we must force normal mapping of the buffer,
- * so that the correct data will appear (only unibus maps are 
- * changed when remapping the transmit buffers).
  */
 struct mbuf *
 if_ubaget(ifu, ifr, totlen, off0, ifp)
@@ -157,25 +177,21 @@ if_ubaget(ifu, ifr, totlen, off0, ifp)
 	struct mbuf *top, **mp;
 	register struct mbuf *m;
 	int off = off0, len;
-	register caddr_t cp = ifr->ifrw_addr + ifu->iff_hlen, pp;
+	register caddr_t cp = ifr->ifrw_addr + ifu->iff_hlen;
 
 	top = 0;
 	mp = &top;
-	if (ifr->ifrw_flags & IFRW_W)
-		rcv_xmtbuf((struct ifxmt *)ifr);
 	while (totlen > 0) {
 		MGET(m, M_DONTWAIT, MT_DATA);
-		if (m == 0) {
-			m_freem(top);
-			top = 0;
-			goto out;
-		}
+		if (m == 0)
+			goto bad;
 		if (off) {
 			len = totlen - off;
 			cp = ifr->ifrw_addr + ifu->iff_hlen + off;
 		} else
 			len = totlen;
-		if (len >= CLBYTES/2) {
+		if (len >= NBPG) {
+			struct mbuf *p;
 			struct pte *cpte, *ppte;
 			int x, *ip, i;
 
@@ -188,20 +204,20 @@ if_ubaget(ifu, ifr, totlen, off0, ifp)
 				len = 0;
 				goto nopage;
 			}
-			MCLGET(m);
-			if (m->m_len != CLBYTES)
+			MCLGET(p, 1);
+			if (p == 0)
 				goto nopage;
 			m->m_len = MIN(len, CLBYTES);
+			m->m_off = (int)p - (int)m;
 			if (!claligned(cp))
 				goto copy;
 
 			/*
-			 * Switch pages mapped to UNIBUS with new page pp,
+			 * Switch pages mapped to UNIBUS with new page p,
 			 * as quick form of copy.  Remap UNIBUS and invalidate.
 			 */
-			pp = mtod(m, char *);
 			cpte = &Mbmap[mtocl(cp)*CLSIZE];
-			ppte = &Mbmap[mtocl(pp)*CLSIZE];
+			ppte = &Mbmap[mtocl(p)*CLSIZE];
 			x = btop(cp - ifr->ifrw_addr);
 			ip = (int *)&ifr->ifrw_mr[x];
 			for (i = 0; i < CLSIZE; i++) {
@@ -211,8 +227,8 @@ if_ubaget(ifu, ifr, totlen, off0, ifp)
 				    cpte++->pg_pfnum|ifr->ifrw_proto;
 				mtpr(TBIS, cp);
 				cp += NBPG;
-				mtpr(TBIS, (caddr_t)pp);
-				pp += NBPG;
+				mtpr(TBIS, (caddr_t)p);
+				p += NBPG / sizeof (*p);
 			}
 			goto nocopy;
 		}
@@ -252,62 +268,10 @@ nocopy:
 			ifp = (struct ifnet *)0;
 		}
 	}
-out:
-	if (ifr->ifrw_flags & IFRW_W)
-		restor_xmtbuf((struct ifxmt *)ifr);
 	return (top);
-}
-
-/*
- * Change the mapping on a transmit buffer so that if_ubaget may
- * receive from that buffer.  Copy data from any pages mapped to Unibus
- * into the pages mapped to normal kernel virtual memory, so that
- * they can be accessed and swapped as usual.  We take advantage
- * of the fact that clusters are placed on the xtofree list
- * in inverse order, finding the last one.
- */
-static
-rcv_xmtbuf(ifw)
-	register struct ifxmt *ifw;
-{
-	register struct mbuf *m;
-	struct mbuf **mprev;
-	register i;
-	int t;
-	char *cp;
-
-	while (i = ffs((long)ifw->ifw_xswapd)) {
-		cp = ifw->ifw_base + i * CLBYTES;
-		i--;
-		ifw->ifw_xswapd &= ~(1<<i);
-		i *= CLSIZE;
-		mprev = &ifw->ifw_xtofree;
-		for (m = ifw->ifw_xtofree; m && m->m_next; m = m->m_next)
-			mprev = &m->m_next;
-		if (m == NULL)
-			panic("rcv_xmtbuf");
-		bcopy(mtod(m, caddr_t), cp, CLBYTES);
-		(void) m_free(m);
-		*mprev = NULL;
-		for (t = 0; t < CLSIZE; t++) {
-			ifw->ifw_mr[i] = ifw->ifw_wmap[i];
-			i++;
-		}
-	}
-}
-
-/*
- * Put a transmit buffer back together after doing an if_ubaget on it,
- * which may have swapped pages.
- */
-static
-restor_xmtbuf(ifw)
-	register struct ifxmt *ifw;
-{
-	register i;
-
-	for (i = 0; i < ifw->ifw_nmr; i++)
-		ifw->ifw_wmap[i] = ifw->ifw_mr[i];
+bad:
+	m_freem(top);
+	return (0);
 }
 
 /*
@@ -363,7 +327,7 @@ if_ubaput(ifu, ifw, m)
 	cc = cp - ifw->ifw_addr;
 	x = ((cc - ifu->iff_hlen) + CLBYTES - 1) >> CLSHIFT;
 	ifw->ifw_xswapd &= ~xswapd;
-	while (i = ffs((long)ifw->ifw_xswapd)) {
+	while (i = ffs(ifw->ifw_xswapd)) {
 		i--;
 		if (i >= x)
 			break;

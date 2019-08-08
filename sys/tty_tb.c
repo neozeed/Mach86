@@ -1,23 +1,46 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)tty_tb.c	7.1 (Berkeley) 6/5/86
+ *	@(#)tty_tb.c	6.5 (Berkeley) 6/8/85
  */
 
 #include "tb.h"
 #if NTB > 0
 
-/*
- * Line discipline for RS232 tablets;
- * supplies binary coordinate data.
- */
 #include "param.h"
 #include "systm.h"
 #include "dir.h"
 #include "user.h"
-#include "tablet.h"
+#include "ioctl.h"
 #include "tty.h"
 #include "proc.h"
 #include "inode.h"
@@ -26,52 +49,32 @@
 #include "uio.h"
 
 /*
- * Tablet configuration table.
+ * Line discipline for RS232 tablets.
+ * Supplies binary coordinate data.
+ *
+ * MAKE TABLET TYPE AN ioctl TO AVOID HAVING ONE DISCIPLINE PER TABLET TYPE.
  */
-struct	tbconf {
-	short	tbc_recsize;	/* input record size in bytes */
-	short	tbc_uiosize;	/* size of data record returned user */
-	int	tbc_sync;	/* mask for finding sync byte/bit */
-	int	(*tbc_decode)();/* decoding routine */
-	char	*tbc_run;	/* enter run mode sequence */
-	char	*tbc_point;	/* enter point mode sequence */
-	char	*tbc_stop;	/* stop sequence */
-	char	*tbc_start;	/* start/restart sequence */
-	int	tbc_flags;
-#define	TBF_POL	0x1	/* polhemus hack */
-};
 
-static	int tbdecode(), gtcodecode(), poldecode();
-static	int tblresdecode(), tbhresdecode();
+#define NTBS		(16)
+#define MALLTABCHAR	(8)
+#define MTABCHAR 	(5)
+#define MNTABCHAR	(6)
 
-struct	tbconf tbconf[TBTYPE] = {
-{ 0 },
-{ 5, sizeof (struct tbpos), 0200, tbdecode, "6", "4" },
-{ 5, sizeof (struct tbpos), 0200, tbdecode, "\1CN", "\1RT", "\2", "\4" },
-{ 8, sizeof (struct gtcopos), 0200, gtcodecode },
-{17, sizeof (struct polpos), 0200, poldecode, 0, 0, "\21", "\5\22\2\23",
- TBF_POL },
-{ 5, sizeof (struct tbpos), 0100, tblresdecode, "\1CN", "\1PT", "\2", "\4"},
-{ 6, sizeof (struct tbpos), 0200, tbhresdecode, "\1CN", "\1PT", "\2", "\4"},
-};
-
-/*
- * Tablet state
- */
 struct tb {
-	int	tbflags;		/* mode & type bits */
-#define	TBMAXREC	17	/* max input record size */
-	char	cbuf[TBMAXREC];		/* input buffer */
-	union {
-		struct	tbpos tbpos;
-		struct	gtcopos gtcopos;
-		struct	polpos polpos;
-	} rets;				/* processed state */
-#define NTBS	16
+	short used;
+	char cbuf[MALLTABCHAR];
+	struct tbpos {
+		int	xpos;
+		int	ypos;
+		short	status;
+		short	scount;
+	} tbpos;
 } tb[NTBS];
 
 /*
- * Open as tablet discipline; called on discipline change.
+ * Open as tablet discipline.  Called when discipline changed
+ * with ioctl, and changes the interpretation of the information
+ * in the tty structure.
  */
 /*ARGSUSED*/
 tbopen(dev, tp)
@@ -80,35 +83,33 @@ tbopen(dev, tp)
 {
 	register struct tb *tbp;
 
-	if (tp->t_line == TABLDISC)
+	if (tp->t_line == TABLDISC || tp->t_line == NTABLDISC)
 		return (ENODEV);
 	ttywflush(tp);
 	for (tbp = tb; tbp < &tb[NTBS]; tbp++)
-		if (tbp->tbflags == 0)
+		if (!tbp->used)
 			break;
 	if (tbp >= &tb[NTBS])
 		return (EBUSY);
-	tbp->tbflags = TBTIGER|TBPOINT;		/* default */
+	tbp->used++;
 	tp->t_cp = tbp->cbuf;
 	tp->t_inbuf = 0;
-	bzero((caddr_t)&tbp->rets, sizeof (tbp->rets));
-	tp->T_LINEP = (caddr_t)tbp;
-	tp->t_flags |= LITOUT;
+	tbp->tbpos.xpos = tbp->tbpos.ypos = 0;
+	tbp->tbpos.status = tbp->tbpos.scount = 0;
+	tp->T_LINEP = (caddr_t) tbp;
 	return (0);
 }
 
 /*
- * Line discipline change or last device close.
+ * Break down... called when discipline changed or from device
+ * close routine.
  */
 tbclose(tp)
 	register struct tty *tp;
 {
-	register int s;
-	int modebits = TBPOINT|TBSTOP;
+	register int s = spl5();
 
-	tbioctl(tp, BIOSMODE, &modebits, 0);
-	s = spl5();
-	((struct tb *)tp->T_LINEP)->tbflags = 0;
+	((struct tb *) tp->T_LINEP)->used = 0;
 	tp->t_cp = 0;
 	tp->t_inbuf = 0;
 	tp->t_rawq.c_cc = 0;		/* clear queues -- paranoid */
@@ -119,215 +120,124 @@ tbclose(tp)
 
 /*
  * Read from a tablet line.
- * Characters have been buffered in a buffer and decoded.
+ * Characters have been buffered in a buffer and
+ * decoded. The coordinates are now sluffed back to the user.
  */
 tbread(tp, uio)
 	register struct tty *tp;
 	struct uio *uio;
 {
-	register struct tb *tbp = (struct tb *)tp->T_LINEP;
-	register struct tbconf *tc = &tbconf[tbp->tbflags & TBTYPE];
-	int ret;
+	struct tbpos *tbpos;
 
-	if ((tp->t_state&TS_CARR_ON) == 0)
+	if ((tp->t_state&TS_CARR_ON)==0)
 		return (EIO);
-	ret = uiomove(&tbp->rets, tc->tbc_uiosize, UIO_READ, uio);
-	if (tc->tbc_flags&TBF_POL)
-		tbp->rets.polpos.p_key = ' ';
-	return (ret);
+	tbpos = &(((struct tb *) (tp->T_LINEP))->tbpos);
+	return (uiomove(tbpos, sizeof *tbpos, UIO_READ, uio));
 }
 
 /*
  * Low level character input routine.
- * Stuff the character in the buffer, and decode
+ * Stuff the character in the buffer, and decode the it
  * if all the chars are there.
  *
  * This routine could be expanded in-line in the receiver
- * interrupt routine to make it run as fast as possible.
+ * interrupt routine of the dh-11 to make it run as fast as possible.
  */
+int	LASTTABC;
+
 tbinput(c, tp)
 	register int c;
 	register struct tty *tp;
 {
-	register struct tb *tbp = (struct tb *)tp->T_LINEP;
-	register struct tbconf *tc = &tbconf[tbp->tbflags & TBTYPE];
+	register struct tb *tbp = (struct tb *) tp->T_LINEP;
 
-	if (tc->tbc_recsize == 0 || tc->tbc_decode == 0)	/* paranoid? */
-		return;
-	/*
-	 * Locate sync bit/byte or reset input buffer.
-	 */
-	if (c&tc->tbc_sync || tp->t_inbuf == tc->tbc_recsize) {
-		tp->t_cp = tbp->cbuf;
-		tp->t_inbuf = 0;
+	if (tp->t_line == TABLDISC) {
+		if ((c&0200) || (tp->t_inbuf == MTABCHAR)) {
+			tp->t_cp = tbp->cbuf;
+			tp->t_inbuf = 0;
+		}
+		*tp->t_cp++ = c&0177;
+		if (++tp->t_inbuf == MTABCHAR)
+			tbdecode(tbp->cbuf, &tbp->tbpos);
+	} else if (tp->t_line == NTABLDISC) {
+		if ((c&0200) || (tp->t_inbuf == MNTABCHAR)) {
+			tp->t_cp = tbp->cbuf;
+			tp->t_inbuf = 0;
+		}
+		*tp->t_cp++ = c&0177;
+		if (++tp->t_inbuf == MNTABCHAR)
+			tbndecode(tbp->cbuf, &tbp->tbpos);
 	}
-	*tp->t_cp++ = c&0177;
-	/*
-	 * Call decode routine only if a full record has been collected.
-	 */
-	if (++tp->t_inbuf == tc->tbc_recsize)
-		(*tc->tbc_decode)(tbp->cbuf, &tbp->rets);
 }
 
 /*
- * Decode GTCO 8 byte format (high res, tilt, and pressure).
+ * Decode tablet coordinates from ascii to binary.
+ *	(gtco 6 character format)
  */
-static
-gtcodecode(cp, tbpos)
+tbndecode(cp, tbpos)
 	register char *cp;
-	register struct gtcopos *tbpos;
+	register struct tbpos *tbpos;
 {
 
-	tbpos->pressure = *cp >> 2;
-	tbpos->status = (tbpos->pressure > 16) | TBINPROX; /* half way down */
-	tbpos->xpos = (*cp++ & 03) << 14;
-	tbpos->xpos |= *cp++ << 7;
-	tbpos->xpos |= *cp++;
-	tbpos->ypos = (*cp++ & 03) << 14;
-	tbpos->ypos |= *cp++ << 7;
-	tbpos->ypos |= *cp++;
-	tbpos->xtilt = *cp++;
-	tbpos->ytilt = *cp++;
+	tbpos->status = *cp>>2;	/* this needs to be decoded */
+	tbpos->xpos = ((*cp++)&03)<<14;
+	tbpos->xpos |= (*cp++)<<7;
+	tbpos->xpos |= (*cp++);
+	tbpos->ypos = ((*cp++)&03)<<14;
+	tbpos->ypos |= (*cp++)<<7;
+	tbpos->ypos |= (*cp++);
 	tbpos->scount++;
 }
 
 /*
- * Decode old Hitachi 5 byte format (low res).
+ * Decode tablet coordinates from ascii to binary.
+ *	(hitachi 5 character format)
  */
-static
 tbdecode(cp, tbpos)
 	register char *cp;
 	register struct tbpos *tbpos;
 {
+	register int status;
 	register char byte;
 
 	byte = *cp++;
-	tbpos->status = (byte&0100) ? TBINPROX : 0;
+	status = (byte&0100) ? 0100000 : 0;
 	byte &= ~0100;
 	if (byte > 036)
-		tbpos->status |= 1 << ((byte-040)/2);
-	tbpos->xpos = *cp++ << 7;
-	tbpos->xpos |= *cp++;
-	if (tbpos->xpos < 256)			/* tablet wraps around at 256 */
-		tbpos->status &= ~TBINPROX;	/* make it out of proximity */
-	tbpos->ypos = *cp++ << 7;
-	tbpos->ypos |= *cp++;
+		status |= 1<<((byte-040)/2);
+	tbpos->xpos = (*cp++)<<7;
+	tbpos->xpos |= (*cp++);
+	if (tbpos->xpos < 256)		/* tablet wraps around at 256 */
+		status &= 077777;	/* make it out of proximity */
+	tbpos->ypos = (*cp++)<<7;
+	tbpos->ypos |= (*cp++);
+	tbpos->status  = status;
 	tbpos->scount++;
 }
 
 /*
- * Decode new Hitach 5-byte format (low res).
+ * This routine is called whenever a ioctl is about to be performed
+ * and gets a chance to reject the ioctl.  We reject all teletype
+ * oriented ioctl's except those which set the discipline, and
+ * those which get parameters (gtty and get special characters).
  */
-static
-tblresdecode(cp, tbpos)
-	register char *cp;
-	register struct tbpos *tbpos;
-{
-
-	*cp &= ~0100;		/* mask sync bit */
-	tbpos->status = (*cp++ >> 2) | TBINPROX;
-	tbpos->xpos = *cp++;
-	tbpos->xpos |= *cp++ << 6;
-	tbpos->ypos = *cp++;
-	tbpos->ypos |= *cp++ << 6;
-	tbpos->scount++;
-}
-
-/*
- * Decode new Hitach 6-byte format (high res).
- */
-static
-tbhresdecode(cp, tbpos)
-	register char *cp;
-	register struct tbpos *tbpos;
-{
-	char byte;
-
-	byte = *cp++;
-	tbpos->xpos = (byte & 03) << 14;
-	tbpos->xpos |= *cp++ << 7;
-	tbpos->xpos |= *cp++;
-	tbpos->ypos = *cp++ << 14;
-	tbpos->ypos |= *cp++ << 7;
-	tbpos->ypos |= *cp++;
-	tbpos->status = (byte >> 2) | TBINPROX;
-	tbpos->scount++;
-}
-
-/*
- * Polhemus decode.
- */
-static
-poldecode(cp, polpos)
-	register char *cp;
-	register struct polpos *polpos;
-{
-
-	polpos->p_x = cp[4] | cp[3]<<7 | (cp[9] & 0x03) << 14;
-	polpos->p_y = cp[6] | cp[5]<<7 | (cp[9] & 0x0c) << 12;
-	polpos->p_z = cp[8] | cp[7]<<7 | (cp[9] & 0x30) << 10;
-	polpos->p_azi = cp[11] | cp[10]<<7 | (cp[16] & 0x03) << 14;
-	polpos->p_pit = cp[13] | cp[12]<<7 | (cp[16] & 0x0c) << 12;
-	polpos->p_rol = cp[15] | cp[14]<<7 | (cp[16] & 0x30) << 10;
-	polpos->p_stat = cp[1] | cp[0]<<7;
-	if (cp[2] != ' ')
-		polpos->p_key = cp[2];
-}
-
 /*ARGSUSED*/
 tbioctl(tp, cmd, data, flag)
 	struct tty *tp;
 	caddr_t data;
 {
-	register struct tb *tbp = (struct tb *)tp->T_LINEP;
 
+	if ((cmd>>8) != 't')
+		return (cmd);
 	switch (cmd) {
-
-	case BIOGMODE:
-		*(int *)data = tbp->tbflags & TBMODE;
-		break;
-
-	case BIOSTYPE:
-		if (tbconf[*(int *)data & TBTYPE].tbc_recsize == 0 ||
-		    tbconf[*(int *)data & TBTYPE].tbc_decode == 0)
-			return (EINVAL);
-		tbp->tbflags &= ~TBTYPE;
-		tbp->tbflags |= *(int *)data & TBTYPE;
-		/* fall thru... to set mode bits */
-
-	case BIOSMODE: {
-		register struct tbconf *tc;
-
-		tbp->tbflags &= ~TBMODE;
-		tbp->tbflags |= *(int *)data & TBMODE;
-		tc = &tbconf[tbp->tbflags & TBTYPE];
-		if (tbp->tbflags&TBSTOP) {
-			if (tc->tbc_stop)
-				ttyout(tc->tbc_stop, tp);
-		} else if (tc->tbc_start)
-			ttyout(tc->tbc_start, tp);
-		if (tbp->tbflags&TBPOINT) {
-			if (tc->tbc_point)
-				ttyout(tc->tbc_point, tp);
-		} else if (tc->tbc_run)
-			ttyout(tc->tbc_run, tp);
-		ttstart(tp);
-		break;
-	}
-
-	case BIOGTYPE:
-		*(int *)data = tbp->tbflags & TBTYPE;
-		break;
 
 	case TIOCSETD:
 	case TIOCGETD:
 	case TIOCGETP:
 	case TIOCGETC:
-		return (-1);		/* pass thru... */
-
-	default:
-		return (ENOTTY);
+		return (cmd);
 	}
+	u.u_error = ENOTTY;
 	return (0);
 }
 #endif

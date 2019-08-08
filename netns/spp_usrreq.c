@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1984, 1985, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)spp_usrreq.c	7.1 (Berkeley) 6/5/86
+ *	@(#)spp_usrreq.c	6.12 (Berkeley) 9/13/85
  */
 
 #include "param.h"
@@ -42,7 +69,6 @@ struct spidp spp_savesi;
 int traceallspps = 0;
 extern int sppconsdebug;
 int spp_hardnosed;
-int spp_use_delack = 0;
 
 /*ARGSUSED*/
 spp_input(m, nsp, ifp)
@@ -205,10 +231,10 @@ spp_input(m, nsp, ifp)
 	m->m_len -= sizeof (struct idp);
 	m->m_off += sizeof (struct idp);
 
-	if (spp_reass(cb, si)) {
-		m_freem(m);
+	if (spp_reass(cb,si)) {
+		goto drop;
 	}
-	(void) spp_output(cb, (struct mbuf *)0);
+	(void) spp_output(cb,(struct mbuf *)0);
 	return;
 
 dropwithreset:
@@ -234,7 +260,7 @@ bad:
  * but its function is somewhat different:  It merely queues
  * packets up, and suppresses duplicates.
  */
-spp_reass(cb, si)
+spp_reass(cb,si)
 register struct sppcb *cb;
 register struct spidp *si;
 {
@@ -252,20 +278,11 @@ register struct spidp *si;
 	 * Update our news from them.
 	 */
 	if (si->si_cc & SP_SA)
-		cb->s_flags |= (spp_use_delack ? SF_DELACK : SF_AK);
-	if (SSEQ_GT(si->si_ack, cb->s_rack)) {
+		cb->s_flags |= SF_DELACK;
+	if (SSEQ_GT(si->si_ack,cb->s_rack)) {
 		cb->s_rack = si->si_ack;
-		/*
-		 * If there are other packets outstanding,
-		 * restart the timer for them.
-		 */
-		if (SSEQ_GEQ(cb->s_snt, si->si_ack)) {
-			TCPT_RANGESET(cb->s_timer[TCPT_REXMT],
-				tcp_beta * cb->s_srtt, TCPTV_MIN,
-				TCPTV_MAX);
-			cb->s_rxtshift = 0;
-		} else
-			cb->s_timer[TCPT_REXMT] = 0;
+		cb->s_timer[TCPT_REXMT] = 0;
+
 		/*
 		 * If transmit timer is running and timed sequence
 		 * number was acked, update smoothed round trip time.
@@ -280,7 +297,7 @@ register struct spidp *si;
 			cb->s_rtt = 0;
 		}
 	}
-	if (SSEQ_GT(si->si_alo, cb->s_ralo)) {
+	if (SSEQ_GT(si->si_alo,cb->s_ralo)) {
 		cb->s_ralo = si->si_alo;
 		cb->s_timer[TCPT_PERSIST] = 0;
 	}
@@ -298,7 +315,7 @@ register struct spidp *si;
 	 * than that of the first packet not yet seen coming
 	 * from them, this must be a duplicate, so drop.
 	 */
-	if (SSEQ_LT(si->si_seq, cb->s_ack)) {
+	if (SSEQ_LT(si->si_seq,cb->s_ack)) {
 		spp_istat.bdreas++;
 		if (si->si_seq == cb->s_ack-1)
 			spp_istat.lstdup++;
@@ -308,16 +325,16 @@ register struct spidp *si;
 	 * If this packet number is higher than that which
 	 * we have allocated refuse it, unless urgent
 	 */
-	if (SSEQ_GT(si->si_seq, cb->s_alo)) {
-		if (si->si_cc & SP_OB) {
-			if (SSEQ_GT(si->si_seq, cb->s_alo + 60)) {
-				ns_error(dtom(si), NS_ERR_FULLUP, 0);
-				return (0);
-			} /* else queue this packet; */
-		} else {
-			spp_istat.notyet++;
-			return (1);
-		}
+	if (SSEQ_GT(si->si_seq,cb->s_alo) && (!(si->si_cc & SP_OB))) {
+		spp_istat.notyet++;
+		return (1);
+	}
+	/*
+	 * If this packet is urgent, inform process
+	 */
+	if (si->si_cc & SP_OB) {
+		cb->s_iobc = ((char *)si)[1 + sizeof(*si)];
+		sohasoutofband(so);
 	}
 
 	/*
@@ -327,17 +344,10 @@ register struct spidp *si;
 
 	for (q = cb->s_q.si_next; q!=&cb->s_q; q = q->si_next) {
 	    if (si->si_seq == SI(q)->si_seq) return (1); /*duplicate */
-	    if (SSEQ_LT(si->si_seq, SI(q)->si_seq)) break;
+	    if (SSEQ_LT(si->si_seq,SI(q)->si_seq)) break;
 	}
-	insque(si, q->si_prev);
-	/*
-	 * If this packet is urgent, inform process
-	 */
-	if (si->si_cc & SP_OB) {
-		cb->s_iobc = ((char *)si)[1 + sizeof(*si)];
-		sohasoutofband(so);
-		cb->s_oobflags |= SF_IOOB;
-	}
+	insque(si,q->si_prev);
+		
 present:
 #define SPINC sizeof(struct sphdr)
 	/*
@@ -350,7 +360,6 @@ present:
 			cb->s_ack++;
 			m = dtom(q);
 			if (SI(q)->si_cc & SP_OB) {
-				cb->s_oobflags &= ~SF_IOOB;
 				if (sb->sb_cc)
 					so->so_oobmark = sb->sb_cc;
 				else
@@ -360,12 +369,12 @@ present:
 			remque(q->si_next);
 			wakeup = 1;
 			if (packetp) {
-				sbappendrecord(sb, m);
+				sbappendrecord(sb,m);
 			} else {
 				cb->s_rhdr = *mtod(m, struct sphdr *);
 				m->m_off += SPINC;
 				m->m_len -= SPINC;
-				sbappend(sb, m);
+				sbappend(sb,m);
 			}
 		  } else
 			break;
@@ -565,9 +574,8 @@ spp_output(cb, m0)
 		/*
 		 * Fill in mbuf with extended SP header
 		 * and addresses and length put into network format.
-		 * Long align so prepended ip headers will work on Gould.
 		 */
-		m->m_off = MMAXOFF - sizeof (struct spidp) - 2;
+		m->m_off = MMAXOFF - sizeof (struct spidp);
 		m->m_len = sizeof (struct spidp);
 		m->m_next = m0;
 		si = mtod(m, struct spidp *);
@@ -608,7 +616,7 @@ spp_output(cb, m0)
 		/*
 		 * queue stuff up for output
 		 */
-		sbappendrecord(sb, m);
+		sbappendrecord(sb,m);
 		cb->s_seq++;
 	}
 	/*
@@ -616,7 +624,7 @@ spp_output(cb, m0)
 	 */
 	{
 		register struct sockbuf *sb2 = &so->so_rcv;
-		int credit = ((((int)sb2->sb_mbmax) - (int)sb2->sb_mbcnt) /
+		int credit = ((sb2->sb_mbmax - sb2->sb_mbcnt) /
 						((short)cb->s_mtu));
 		int alo = cb->s_ack + (credit > 0 ? credit : 0) - 1;
 
@@ -642,17 +650,17 @@ spp_output(cb, m0)
 	} else {
 		/*
 		 * Decide what to transmit:
-		 * If it is time to retransmit a packet,
-		 * send that.
 		 * If we have a new packet, send that
 		 * (So long as it is in our allocation)
+		 * If it is time to retransmit a packet,
+		 * send that.
 		 * Otherwise, see if it time to bang on them
 		 * to ask for our current allocation.
 		 */
-		if (cb->s_force == (1+TCPT_REXMT)) {
-			lookfor = cb->s_rack;
-		} else if (SSEQ_LT(cb->s_snt, cb->s_ralo)) {
+		if (SSEQ_LT(cb->s_snt, cb->s_ralo))
 			lookfor = cb->s_snt + 1;
+		else if (cb->s_force == (1+TCPT_REXMT)) {
+			lookfor = cb->s_rack;
 		} else if (SSEQ_LT(cb->s_ralo, cb->s_seq)) {
 			lookfor = 0;
 			if (cb->s_timer[TCPT_PERSIST] == 0) {
@@ -710,13 +718,12 @@ spp_output(cb, m0)
 		si->si_seq = cb->s_snt + 1;
 		si->si_len = htons(sizeof (*si));
 		si->si_cc |= SP_SP;
+		cb->s_flags &= ~SF_AK;
 	}
 	/*
 	 * Stuff checksum and output datagram.
 	 */
 	if (si) {
-		if (cb->s_flags & (SF_AK|SF_DELACK))
-			cb->s_flags &= ~(SF_AK|SF_DELACK);
 		/*
 		 * If we are almost out of allocation
 		 * or one of the timers has gone off
@@ -775,9 +782,10 @@ spp_output(cb, m0)
 		if (traceallspps && sppconsdebug) {
 			printf("spp_out: %x\n", error);
 		}
-		if (so->so_options & SO_DEBUG || traceallspps)
-			spp_trace(SA_OUTPUT, cb->s_state, cb, si, 0);
+		return (error);
 	}
+	if (so->so_options & SO_DEBUG || traceallspps)
+		spp_trace(SA_OUTPUT, cb->s_state, cb, si, 0);
 	return (error);
 }
 
@@ -842,10 +850,6 @@ spp_ctloutput(req, so, level, name, value)
 			m->m_len = sizeof(struct spidp);
 			m->m_off = MMAXOFF - sizeof(struct sphdr);
 			*mtod(m, struct sphdr *) = cb->s_shdr.si_s;
-			break;
-
-		default:
-			error = EINVAL;
 		}
 		*value = m;
 		break;
@@ -885,10 +889,6 @@ spp_ctloutput(req, so, level, name, value)
 				cb->s_dt = sp->sp_dt;
 				cb->s_cc = sp->sp_cc & SP_EM;
 			}
-			break;
-
-		default:
-			error = EINVAL;
 		}
 		m_freem(*value);
 		break;
@@ -940,7 +940,7 @@ spp_usrreq(so, req, m, nam, rights)
 			break;
 		nsp = sotonspcb(so);
 		{
-			struct mbuf *mm = m_getclr(M_DONTWAIT, MT_PCB);
+			struct mbuf *mm = m_getclr(M_DONTWAIT,MT_PCB);
 
 			if (mm == NULL) {
 				error = ENOBUFS;
@@ -1052,6 +1052,11 @@ spp_usrreq(so, req, m, nam, rights)
 		(void) spp_output(cb, (struct mbuf *) 0);
 		break;
 
+	case PRU_SEND:
+		error = spp_output(cb, m);
+		m = NULL;
+		break;
+
 	case PRU_ABORT:
 		(void) spp_drop(cb, ECONNABORTED);
 		break;
@@ -1063,25 +1068,31 @@ spp_usrreq(so, req, m, nam, rights)
 		break;
 
 	case PRU_RCVOOB:
-		if ((cb->s_oobflags & SF_IOOB) || so->so_oobmark ||
-		    (so->so_state & SS_RCVATMARK)) {
-			m->m_len = 1;
-			*mtod(m, caddr_t) = cb->s_iobc;
+		if (so->so_oobmark == 0 &&
+		    (so->so_state & SS_RCVATMARK) == 0) {
+			error = EINVAL;
 			break;
 		}
-		error = EINVAL;
+		if ( ! (cb->s_oobflags & SF_IOOB) ) {
+			error = EWOULDBLOCK;
+			break;
+		}
+		m->m_len = 1;
+		*mtod(m, caddr_t) = cb->s_iobc;
+		if (((int)nam & MSG_PEEK) == 0)
+			cb->s_oobflags &= ~ SF_IOOB;
 		break;
 
 	case PRU_SENDOOB:
 		if (sbspace(&so->so_snd) < -512) {
+			m_freem(m);
 			error = ENOBUFS;
 			break;
 		}
 		cb->s_oobflags |= SF_SOOB;
-		/* fall into */
-	case PRU_SEND:
 		error = spp_output(cb, m);
 		m = NULL;
+		cb->s_oobflags &= ~SF_SOOB;
 		break;
 
 	case PRU_SOCKADDR:

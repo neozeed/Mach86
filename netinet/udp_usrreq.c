@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)udp_usrreq.c	7.1 (Berkeley) 6/5/86
+ *	@(#)udp_usrreq.c	6.15 (Berkeley) 9/16/85
  */
 
 #include "param.h"
@@ -38,17 +65,11 @@ udp_init()
 	udb.inp_next = udb.inp_prev = &udb;
 }
 
-#ifndef	COMPAT_42
 int	udpcksum = 1;
-#else
-int	udpcksum = 0;		/* XXX */
-#endif
-
 struct	sockaddr_in udp_in = { AF_INET };
 
-udp_input(m0, ifp)
+udp_input(m0)
 	struct mbuf *m0;
-	struct ifnet *ifp;
 {
 	register struct udpiphdr *ui;
 	register struct inpcb *inp;
@@ -112,8 +133,7 @@ udp_input(m0, ifp)
 		if (in_broadcast(ui->ui_dst))
 			goto bad;
 		*(struct ip *)ui = ip;
-		icmp_error((struct ip *)ui, ICMP_UNREACH, ICMP_UNREACH_PORT,
-		    ifp);
+		icmp_error((struct ip *)ui, ICMP_UNREACH, ICMP_UNREACH_PORT);
 		return;
 	}
 
@@ -132,18 +152,6 @@ udp_input(m0, ifp)
 	return;
 bad:
 	m_freem(m);
-}
-
-/*
- * Notify a udp user of an asynchronous error;
- * just wake up so that he can collect error status.
- */
-udp_notify(inp)
-	register struct inpcb *inp;
-{
-
-	sorwakeup(inp->inp_socket);
-	sowwakeup(inp->inp_socket);
 }
 
 udp_ctlinput(cmd, sa)
@@ -179,17 +187,19 @@ udp_ctlinput(cmd, sa)
 		if (inetctlerrmap[cmd] == 0)
 			return;		/* XXX */
 		in_pcbnotify(&udb, &sin->sin_addr, (int)inetctlerrmap[cmd],
-			udp_notify);
+			(int (*)())0);
 	}
 }
 
 udp_output(inp, m0)
-	register struct inpcb *inp;
+	struct inpcb *inp;
 	struct mbuf *m0;
 {
 	register struct mbuf *m;
 	register struct udpiphdr *ui;
+	register struct socket *so;
 	register int len = 0;
+	register struct route *ro;
 
 	/*
 	 * Calculate data length and get a mbuf
@@ -230,9 +240,27 @@ udp_output(inp, m0)
 		ui->ui_sum = -1;
 	}
 	((struct ip *)ui)->ip_len = sizeof (struct udpiphdr) + len;
-	((struct ip *)ui)->ip_ttl = UDP_TTL;
-	return (ip_output(m, inp->inp_options, &inp->inp_route,
-	    inp->inp_socket->so_options & (SO_DONTROUTE | SO_BROADCAST)));
+	((struct ip *)ui)->ip_ttl = MAXTTL;
+	so = inp->inp_socket;
+	if (so->so_options & SO_DONTROUTE)
+		return (ip_output(m, inp->inp_options, (struct route *)0,
+		    (so->so_options & SO_BROADCAST) | IP_ROUTETOIF));
+	/*
+	 * Use cached route for previous datagram if
+	 * this is also to the same destination. 
+	 *
+	 * NB: We don't handle broadcasts because that
+	 *     would require 3 subroutine calls.
+	 */
+	ro = &inp->inp_route;
+#define	satosin(sa)	((struct sockaddr_in *)(sa))
+	if (ro->ro_rt &&
+	    satosin(&ro->ro_dst)->sin_addr.s_addr != ui->ui_dst.s_addr) {
+		RTFREE(ro->ro_rt);
+		ro->ro_rt = (struct rtentry *)0;
+	}
+	return (ip_output(m, inp->inp_options, ro, 
+	    so->so_options & SO_BROADCAST));
 }
 
 int	udp_sendspace = 2048;		/* really max datagram size */
@@ -274,6 +302,10 @@ udp_usrreq(so, req, m, nam, rights)
 		break;
 
 	case PRU_DETACH:
+		if (inp == NULL) {
+			error = ENOTCONN;
+			break;
+		}
 		in_pcbdetach(inp);
 		break;
 
@@ -309,7 +341,7 @@ udp_usrreq(so, req, m, nam, rights)
 			break;
 		}
 		in_pcbdisconnect(inp);
-		so->so_state &= ~SS_ISCONNECTED;		/* XXX */
+		soisdisconnected(so);
 		break;
 
 	case PRU_SHUTDOWN:

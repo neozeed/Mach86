@@ -1,10 +1,45 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ip_input.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ip_input.c	6.12 (Berkeley) 9/16/85
  */
+#if CMU
+/***********************************************************************
+ * HISTORY
+ * 17-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Fixed off by one error in ip_init.  Fix from IBM/Sailboat 4.2
+ *	sources.
+ */
+#endif CMU
 
 #include "param.h"
 #include "systm.h"
@@ -61,7 +96,7 @@ ip_init()
 	for (i = 0; i < IPPROTO_MAX; i++)
 		ip_protox[i] = pr - inetsw;
 	for (pr = inetdomain.dom_protosw;
-	    pr < inetdomain.dom_protoswNPROTOSW; pr++)
+	    pr <= inetdomain.dom_protoswNPROTOSW; pr++)
 		if (pr->pr_domain->dom_family == PF_INET &&
 		    pr->pr_protocol && pr->pr_protocol != IPPROTO_RAW)
 			ip_protox[pr->pr_protocol] = pr - inetsw;
@@ -101,13 +136,6 @@ next:
 	splx(s);
 	if (m == 0)
 		return;
-	/*
-	 * If no IP addresses have been set yet but the interfaces
-	 * are receiving, can't do anything with incoming packets yet.
-	 */
-	if (in_ifaddr == NULL)
-		goto bad;
-	ipstat.ips_total++;
 	if ((m->m_off > MMAXOFF || m->m_len < sizeof (struct ip)) &&
 	    (m = m_pullup(m, sizeof (struct ip))) == 0) {
 		ipstat.ips_toosmall++;
@@ -177,7 +205,7 @@ next:
 	 * to be sent and the original packet to be freed).
 	 */
 	ip_nhops = 0;		/* for source routed packets */
-	if (hlen > sizeof (struct ip) && ip_dooptions(ip, ifp))
+	if (hlen > sizeof (struct ip) && ip_dooptions(ip))
 		goto next;
 
 	/*
@@ -188,28 +216,16 @@ next:
 
 		if (IA_SIN(ia)->sin_addr.s_addr == ip->ip_dst.s_addr)
 			goto ours;
-		if (
-#ifdef	DIRECTED_BROADCAST
-		    ia->ia_ifp == ifp &&
-#endif
-		    (ia->ia_ifp->if_flags & IFF_BROADCAST)) {
-			u_long t;
-
-			if (satosin(&ia->ia_broadaddr)->sin_addr.s_addr ==
-			    ip->ip_dst.s_addr)
-				goto ours;
-			if (ip->ip_dst.s_addr == ia->ia_netbroadcast.s_addr)
-				goto ours;
-			/*
-			 * Look for all-0's host part (old broadcast addr),
-			 * either for subnet or net.
-			 */
-			t = ntohl(ip->ip_dst.s_addr);
-			if (t == ia->ia_subnet)
-				goto ours;
-			if (t == ia->ia_net)
-				goto ours;
-		}
+		if ((ia->ia_ifp->if_flags & IFF_BROADCAST) &&
+		    satosin(&ia->ia_broadaddr)->sin_addr.s_addr ==
+			ip->ip_dst.s_addr)
+			    goto ours;
+		/*
+		 * Look for all-0's host part (old broadcast addr).
+		 */
+		if ((ia->ia_ifp->if_flags & IFF_BROADCAST) &&
+		    ia->ia_subnet == ntohl(ip->ip_dst.s_addr))
+			goto ours;
 	}
 	if (ip->ip_dst.s_addr == (u_long)INADDR_BROADCAST)
 		goto ours;
@@ -495,9 +511,8 @@ struct in_ifaddr *ip_rtaddr();
  * possibly discarding it if bad options
  * are encountered.
  */
-ip_dooptions(ip, ifp)
-	register struct ip *ip;
-	struct ifnet *ifp;
+ip_dooptions(ip)
+	struct ip *ip;
 {
 	register u_char *cp;
 	int opt, optlen, cnt, off, code, type = ICMP_PARAMPROB;
@@ -567,7 +582,7 @@ ip_dooptions(ip, ifp)
 			/*
 			 * locate outgoing interface
 			 */
-			bcopy((caddr_t)(cp + off), (caddr_t)&ipaddr.sin_addr,
+			bcopy(cp + off, (caddr_t)&ipaddr.sin_addr,
 			    sizeof(ipaddr.sin_addr));
 			if ((opt == IPOPT_SSRR &&
 			    in_iaonnetof(in_netof(ipaddr.sin_addr)) == 0) ||
@@ -577,8 +592,8 @@ ip_dooptions(ip, ifp)
 				goto bad;
 			}
 			ip->ip_dst = ipaddr.sin_addr;
-			bcopy((caddr_t)&(IA_SIN(ia)->sin_addr),
-			    (caddr_t)(cp + off), sizeof(struct in_addr));
+			bcopy(&(IA_SIN(ia)->sin_addr), cp + off,
+				sizeof(struct in_addr));
 			cp[IPOPT_OFFSET] += sizeof(struct in_addr);
 			break;
 
@@ -593,7 +608,11 @@ ip_dooptions(ip, ifp)
 			off--;			/* 0 origin */
 			if (off > optlen - sizeof(struct in_addr))
 				break;
-			bcopy((caddr_t)(cp + off), (caddr_t)&ipaddr.sin_addr,
+#if	CS_BUGFIX || 1		/* XXX - till merge */
+			bcopy(cp + off, (caddr_t)&ipaddr.sin_addr,
+#else	CS_BUGFIX
+			bcopy(cp + off, (caddr_t)ipaddr.sin_addr,
+#endif	CS_BUGFIX
 			    sizeof(ipaddr.sin_addr));
 			/*
 			 * locate outgoing interface
@@ -603,8 +622,8 @@ ip_dooptions(ip, ifp)
 				code = ICMP_UNREACH_SRCFAIL;
 				goto bad;
 			}
-			bcopy((caddr_t)&(IA_SIN(ia)->sin_addr),
-			    (caddr_t)(cp + off), sizeof(struct in_addr));
+			bcopy(&(IA_SIN(ia)->sin_addr), cp + off,
+				sizeof(struct in_addr));
 			cp[IPOPT_OFFSET] += sizeof(struct in_addr);
 			break;
 
@@ -656,7 +675,7 @@ ip_dooptions(ip, ifp)
 	}
 	return (0);
 bad:
-	icmp_error(ip, type, code, ifp);
+	icmp_error(ip, type, code);
 	return (1);
 }
 
@@ -699,10 +718,10 @@ ip_rtaddr(dst)
  * to be picked up later by ip_srcroute if the receiver is interested.
  */
 save_rte(option, dst)
-	u_char *option;
+	caddr_t option;
 	struct in_addr dst;
 {
-	unsigned olen;
+	int olen;
 	extern ipprintfs;
 
 	olen = option[IPOPT_OLEN];
@@ -711,7 +730,7 @@ save_rte(option, dst)
 			printf("save_rte: olen %d\n", olen);
 		return;
 	}
-	bcopy((caddr_t)option, (caddr_t)ip_srcrt.srcopt, olen);
+	bcopy(option, (caddr_t)ip_srcrt.srcopt, olen);
 	ip_nhops = (olen - IPOPT_OFFSET - 1) / sizeof(struct in_addr);
 	ip_srcrt.route[ip_nhops++] = dst;
 }
@@ -809,11 +828,6 @@ int	ipsendredirects = IPSENDREDIRECTS;
  * an icmp packet.  Note we can't always generate a meaningful
  * icmp message because icmp doesn't have a large enough repertoire
  * of codes and types.
- *
- * If not forwarding (possibly because we have only a single external
- * network), just drop the packet.  This could be confusing if ipforwarding
- * was zero but some routing protocol was advancing us as a gateway
- * to somewhere.  However, we must let the routing protocol deal with that.
  */
 ip_forward(ip, ifp)
 	register struct ip *ip;
@@ -824,20 +838,17 @@ ip_forward(ip, ifp)
 	struct mbuf *mcopy;
 	struct in_addr dest;
 
+#ifdef lint
 	dest.s_addr = 0;
+#endif
 	if (ipprintfs)
 		printf("forward: src %x dst %x ttl %x\n", ip->ip_src,
 			ip->ip_dst, ip->ip_ttl);
 	ip->ip_id = htons(ip->ip_id);
 	if (ipforwarding == 0 || in_interfaces <= 1) {
-		ipstat.ips_cantforward++;
-#ifdef GATEWAY
+		/* can't tell difference between net and host */
 		type = ICMP_UNREACH, code = ICMP_UNREACH_NET;
 		goto sendicmp;
-#else
-		m_freem(dtom(ip));
-		return;
-#endif
 	}
 	if (ip->ip_ttl < IPTTLDEC) {
 		type = ICMP_TIMXCEED, code = ICMP_TIMXCEED_INTRANS;
@@ -849,7 +860,7 @@ ip_forward(ip, ifp)
 	 * Save at most 64 bytes of the packet in case
 	 * we need to generate an ICMP message to the src.
 	 */
-	mcopy = m_copy(dtom(ip), 0, imin((int)ip->ip_len, 64));
+	mcopy = m_copy(dtom(ip), 0, imin(ip->ip_len, 64));
 
 	sin = (struct sockaddr_in *)&ipforward_rt.ro_dst;
 	if (ipforward_rt.ro_rt == 0 ||
@@ -884,8 +895,9 @@ ip_forward(ip, ifp)
 			dest = ip->ip_dst;
 		    /*
 		     * If the destination is reached by a route to host,
-		     * is on a subnet of a local net, or is directly
-		     * on the attached net (!), use host redirect.
+		     * is directly on the attached net (!),
+		     * or if the destination is on a subnet of a local net
+		     * not known to the source net, use host redirect.
 		     * (We may be the correct first hop for other subnets.)
 		     */
 		    type = ICMP_REDIRECT;
@@ -895,8 +907,8 @@ ip_forward(ip, ifp)
 			code = ICMP_REDIRECT_HOST;
 		    else for (ia = in_ifaddr; ia = ia->ia_next; )
 			if ((dst & ia->ia_netmask) == ia->ia_net) {
-			    if (ia->ia_subnetmask != ia->ia_netmask)
-				    code = ICMP_REDIRECT_HOST;
+			    if ((src & ia->ia_netmask) != ia->ia_net)
+				code = ICMP_REDIRECT_HOST;
 			    break;
 			}
 		    if (ipprintfs)
@@ -950,5 +962,5 @@ ip_forward(ip, ifp)
 		break;
 	}
 sendicmp:
-	icmp_error(ip, type, code, ifp, dest);
+	icmp_error(ip, type, code, dest);
 }

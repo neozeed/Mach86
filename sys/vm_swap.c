@@ -1,10 +1,55 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)vm_swap.c	7.1 (Berkeley) 6/5/86
+ *	@(#)vm_swap.c	6.4 (Berkeley) 6/8/85
  */
+#if	CMU
+
+/*
+ * HISTORY
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 10-Sep-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Updated for master/slave operation.
+ *
+ */
+
+#include "mach_mp.h"
+#include "mach_vm.h"
+#endif	CMU
+
+#if	MACH_VM
+#else	MACH_VM
 
 #include "../machine/pte.h"
 
@@ -19,6 +64,9 @@
 #include "cmap.h"
 #include "vm.h"
 
+#if	MACH_MP
+#include "../mp/sched.h"
+#endif	MACH_MP
 /*
  * Swap a process in.
  */
@@ -53,9 +101,18 @@ swapin(p)
 	}
 
 	p->p_rssize = 0;
-	s = splclock();
+#if	MACH_MP
+	s = splhigh();
+	if (p->p_stat == SRUN) {
+		lock_write(&sched_lock);
+		unix_setrq(p);
+		lock_write_done(&sched_lock);
+	}
+#else	MACH_MP
+	s = spl6();
 	if (p->p_stat == SRUN)
 		setrq(p);
+#endif	MACH_MP
 	p->p_flag |= SLOAD;
 	if (p->p_flag & SSWAP) {
 		swaputl.u_pcb.pcb_sswap = (int *)&u.u_ssave;
@@ -86,6 +143,7 @@ swapout(p, ds, ss)
 {
 	register struct pte *map;
 	register struct user *utl;
+	register int a;
 	int s;
 	int rc = 1;
 
@@ -98,14 +156,16 @@ swapout(p, ds, ss)
 			map = Xswap2map;
 			utl = &xswap2utl;
 		}
+	a = spl6();
 	while (xswaplock & s) {
 		xswapwant |= s;
 		sleep((caddr_t)map, PSWP);
 	}
 	xswaplock |= s;
+	splx(a);
 	uaccess(p, map, utl);
 	if (vgetswu(p, utl) == 0) {
-		p->p_flag |= SLOAD;
+		swkill(p, "swapout: no swap space");
 		rc = 0;
 		goto out;
 	}
@@ -116,21 +176,16 @@ swapout(p, ds, ss)
 	if (p->p_textp) {
 		if (p->p_textp->x_ccount == 1)
 			p->p_textp->x_swrss = p->p_textp->x_rssize;
-		xdetach(p->p_textp, p);
+		xccdec(p->p_textp, p);
 	}
 	p->p_swrss = p->p_rssize;
-	vsswap(p, dptopte(p, 0), CDATA, 0, (int)ds, &utl->u_dmap);
-	vsswap(p, sptopte(p, CLSIZE-1), CSTACK, 0, (int)ss, &utl->u_smap);
+	vsswap(p, dptopte(p, 0), CDATA, 0, ds, &utl->u_dmap);
+	vsswap(p, sptopte(p, CLSIZE-1), CSTACK, 0, ss, &utl->u_smap);
 	if (p->p_rssize != 0)
 		panic("swapout rssize");
 
 	swdspt(p, utl, B_WRITE);
-	/*
-	 * If freeing the user structure and kernel stack
-	 * for the current process, have to run a bit longer
-	 * using the pages which are about to be freed...
-	 * vrelu will then block memory allocation by raising ipl.
-	 */
+	(void) spl6();		/* hack memory interlock XXX */
 	vrelu(p, 1);
 	if ((p->p_flag & SLOAD) && (p->p_stat != SRUN || p != u.u_procp))
 		panic("swapout");
@@ -151,6 +206,20 @@ out:
 	if (xswapwant & s) {
 		xswapwant &= ~s;
 		wakeup((caddr_t)map);
+	}
+	if (rc == 0) {
+#if	MACH_MP
+		a = splhigh();
+		p->p_flag |= SLOAD;
+		if (unix_remrq(p))
+			unix_setrq(p);
+#else	MACH_MP
+		a = spl6();
+		p->p_flag |= SLOAD;
+		if (p != u.u_procp && p->p_stat == SRUN)
+			setrq(p);
+#endif	MACH_MP
+		splx(a);
 	}
 	return (rc);
 }
@@ -206,7 +275,7 @@ swdspt(p, utl, rdwri)
 		swpt(rdwri, p, szpt - ssz - tsz, p->p_szpt - ssz, ssz * NBPG);
 	if (utl->u_odsize)
 		swpt(rdwri, p, 0, tsz,
-		  (int)(clrnd(ctopt(p->p_tsize + utl->u_odsize)) - tsz) * NBPG);
+		    (clrnd(ctopt(p->p_tsize + utl->u_odsize)) - tsz) * NBPG);
 check:
 	for (i = 0; i < utl->u_odsize; i++) {
 		pte = dptopte(p, i);
@@ -220,10 +289,6 @@ check:
 	}
 }
 
-/*
- * Swap a section of the page tables.
- * Errors are handled at a lower level (by doing a panic).
- */
 swpt(rdwri, p, doff, a, n)
 	int rdwri;
 	struct proc *p;
@@ -232,6 +297,7 @@ swpt(rdwri, p, doff, a, n)
 
 	if (n <= 0)
 		return;
-	(void)swap(p, p->p_swaddr + ctod(UPAGES) + ctod(doff),
+	swap(p, p->p_swaddr + ctod(UPAGES) + ctod(doff),
 	    (caddr_t)&p->p_p0br[a * NPTEPG], n, rdwri, B_PAGET, swapdev, 0);
 }
+#endif	MACH_VM

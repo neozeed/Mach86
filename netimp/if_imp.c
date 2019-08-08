@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)if_imp.c	7.1 (Berkeley) 6/4/86
+ *	@(#)if_imp.c	6.7 (Berkeley) 9/16/85
  */
 
 #include "imp.h"
@@ -68,8 +95,7 @@ struct imp_softc {
 	char	imp_dropcnt;		/* used during initialization */
 } imp_softc[NIMP];
 
-struct	ifqueue impintrq;
-int	impqmaxlen = IFQ_MAXLEN;
+struct ifqueue impintrq;
 
 /*
  * Messages from IMP regarding why
@@ -100,9 +126,6 @@ impattach(ui, reset)
 	struct imp_softc *sc;
 	register struct ifnet *ifp;
 
-#ifdef lint
-	impintr();
-#endif
 	if (ui->ui_unit >= NIMP) {
 		printf("imp%d: not configured\n", ui->ui_unit);
 		return (0);
@@ -143,7 +166,6 @@ impinit(unit)
 	}
 	sc->imp_state = IMPS_INIT;
 	impnoops(sc);
-	impintrq.ifq_maxlen = impqmaxlen;
 	splx(s);
 }
 
@@ -192,40 +214,20 @@ impinput(unit, m)
 	if (impprintfs)
 		printleader("impinput", ip);
 #endif
-	inq = &impintrq;
 
 	/* check leader type */
 	if (ip->il_format != IMP_NFF) {
 		sc->imp_if.if_collisions++;	/* XXX */
-		goto rawlinkin;
+		goto drop;
 	}
 
 	if (ip->il_mtype != IMPTYPE_DATA) {
 		/* If not data packet, build IP addr from leader (BRL) */
 		imp_leader_to_addr(&addr, ip, &sc->imp_if);
 	}
-
 	switch (ip->il_mtype) {
 
 	case IMPTYPE_DATA:
-		/*
-		 * Data for a protocol.  Dispatch to the appropriate
-		 * protocol routine (running at software interrupt).
-		 * If this isn't a raw interface, advance pointer
-		 * into mbuf past leader.
-		 */
-		switch (ip->il_link) {
-
-		case IMPLINK_IP:
-			m->m_len -= sizeof(struct imp_leader);
-			m->m_off += sizeof(struct imp_leader);
-			schednetisr(NETISR_IP);
-			inq = &ipintrq;
-			break;
-
-		default:
-			break;
-		}
 		break;
 
 	/*
@@ -243,7 +245,7 @@ impinput(unit, m)
 			hostreset(((struct in_ifaddr *)&sc->imp_if.if_addrlist)->ia_net);
 			impnoops(sc);
 		}
-		break;
+		goto drop;
 
 	/*
 	 * IMP going down.  Print message, and if not immediate,
@@ -252,14 +254,14 @@ impinput(unit, m)
 	 */
 	case IMPTYPE_DOWN:
 		if (sc->imp_state < IMPS_INIT)
-			break;
+			goto drop;
 		if ((ip->il_link & IMP_DMASK) == 0) {
 			sc->imp_state = IMPS_GOINGDOWN;
 			timeout(impdown, (caddr_t)sc, 30 * hz);
 		}
 		impmsg(sc, "going down %s",
 			(u_int)impmessage[ip->il_link&IMP_DMASK]);
-		break;
+		goto drop;
 
 	/*
 	 * A NOP usually seen during the initialization sequence.
@@ -272,23 +274,22 @@ impinput(unit, m)
 			sc->imp_dropcnt = IMP_DROPCNT;
 		}
 		if (sc->imp_state == IMPS_INIT && --sc->imp_dropcnt > 0)
-			break;
+			goto drop;
 		sin = (struct sockaddr_in *)&sc->imp_if.if_addrlist->ifa_addr;
-		if (ip->il_imp != 0) {
+		if (ip->il_imp != 0) {	/* BRL */
 			struct in_addr leader_addr;
-
 			imp_leader_to_addr(&leader_addr, ip, &sc->imp_if);
 			if (sin->sin_addr.s_addr != leader_addr.s_addr) {
 				impmsg(sc, "address reset to x%x (%d/%d)",
-					ntohl(leader_addr.s_addr),
+					htonl(leader_addr.s_addr),
 					(u_int)ip->il_host,
-					ntohs(ip->il_imp));
+					htons(ip->il_imp));
 				sin->sin_addr.s_addr = leader_addr.s_addr;
 			}
 		}
 		sc->imp_state = IMPS_UP;
 		sc->imp_if.if_flags |= IFF_UP;
-		break;
+		goto drop;
 
 	/*
 	 * RFNM or INCOMPLETE message, send next
@@ -319,7 +320,7 @@ impinput(unit, m)
 			hostfree(hp);
 			hp->h_timer = HOSTDEADTIMER;
 		}
-		break;
+		goto rawlinkin;
 
 	/*
 	 * Error in data.  Clear RFNM status for this host and send
@@ -330,7 +331,7 @@ impinput(unit, m)
 		if (hp = hostlookup(addr))
 			hp->h_rfnm = 0;
 		impnoops(sc);
-		break;
+		goto drop;
 
 	/*
 	 * Interface reset.
@@ -340,35 +341,41 @@ impinput(unit, m)
 		/* clear RFNM counts */
 		hostreset(((struct in_ifaddr *)&sc->imp_if.if_addrlist)->ia_net);
 		impnoops(sc);
-		break;
+		goto drop;
 
 	default:
 		sc->imp_if.if_collisions++;		/* XXX */
-		break;
+		goto drop;
 	}
 
-rawlinkin:
-	if (inq == &impintrq)
+	/*
+	 * Data for a protocol.  Dispatch to the appropriate
+	 * protocol routine (running at software interrupt).
+	 * If this isn't a raw interface, advance pointer
+	 * into mbuf past leader.
+	 */
+	switch (ip->il_link) {
+
+	case IMPLINK_IP:
+		m->m_len -= sizeof(struct imp_leader);
+		m->m_off += sizeof(struct imp_leader);
+		schednetisr(NETISR_IP);
+		inq = &ipintrq;
+		break;
+
+	default:
+	rawlinkin:
 		schednetisr(NETISR_IMP);
+		inq = &impintrq;
+		break;
+	}
 	/*
 	 * Re-insert interface pointer in the mbuf chain
 	 * for the next protocol up.
 	 */
-	if (M_HASCL(m) && (mtod(m, int) & CLOFSET) < sizeof(struct ifnet *)) {
-		struct mbuf *n;
-
-		MGET(n, M_DONTWAIT, MT_HEADER);
-		if (n == 0)
-			goto drop;
-		n->m_next = m;
-		m = n;
-		m->m_len = 0;
-		m->m_off = MMINOFF + sizeof(struct ifnet  *);
-	}
 	m->m_off -= sizeof(struct ifnet *);
 	m->m_len += sizeof(struct ifnet *);
 	*(mtod(m, struct ifnet **)) = ifp;
-
 	if (IF_QFULL(inq)) {
 		IF_DROP(inq);
 		goto drop;
@@ -395,7 +402,7 @@ impdown(sc)
 	splx(s);
 }
 
-/*VARARGS2*/
+/*VARARGS*/
 impmsg(sc, fmt, a1, a2, a3)
 	struct imp_softc *sc;
 	char *fmt;
@@ -434,21 +441,17 @@ impintr()
 		imp_leader_to_addr(&impsrc.sin_addr, (struct imp_leader *)cp,
 		    ifp);
 		impproto.sp_protocol = cp->dl_link;
-		impdst.sin_addr = IA_SIN(ifp->if_addrlist)->sin_addr;
+		impdst.sin_addr = IA_SIN(ifp->if_addrlist->ifa_addr)->sin_addr;
 
-		if (cp->dl_mtype == IMPTYPE_HOSTDEAD ||
-		    cp->dl_mtype == IMPTYPE_HOSTUNREACH)
-			switch (cp->dl_link) {
+		switch (cp->dl_link) {
 
-			case IMPLINK_IP:
-				pfctlinput((int)cp->dl_mtype,
-				    (struct sockaddr *)&impsrc);
-				break;
-			default:
-				raw_ctlinput((int)cp->dl_mtype,
-				    (struct sockaddr *)&impsrc);
-				break;
-			}
+		case IMPLINK_IP:
+			pfctlinput(cp->dl_mtype, (caddr_t)&impsrc);
+			break;
+		default:
+			raw_ctlinput(cp->dl_mtype, (caddr_t)&impsrc);
+			break;
+		}
 
 		raw_input(m, &impproto, (struct sockaddr *)&impsrc,
 		  (struct sockaddr *)&impdst);
@@ -728,12 +731,12 @@ imp_leader_to_addr(ap, ip, ifp)
 	register struct imp_leader *ip;
 	struct ifnet *ifp;
 {
-	register u_long final;
+	register long final;
 	register struct sockaddr_in *sin;
-	int imp = ntohs(ip->il_imp);
+	int imp = htons(ip->il_imp);
 
 	sin = (struct sockaddr_in *)(&ifp->if_addrlist->ifa_addr);
-	final = ntohl(sin->sin_addr.s_addr);
+	final = htonl(sin->sin_addr.s_addr);
 
 	if (IN_CLASSA(final)) {
 		final &= IN_CLASSA_NET;
@@ -753,9 +756,9 @@ imp_leader_to_addr(ap, ip, ifp)
  */
 imp_addr_to_leader(imp, a)
 	register struct imp_leader *imp;
-	u_long a;
+	long a;
 {
-	register u_long addr = ntohl(a);
+	register long addr = htonl(a);		/* host order */
 
 	imp->il_network = 0;	/* !! */
 
@@ -769,6 +772,6 @@ imp_addr_to_leader(imp, a)
 		imp->il_host = ((addr>>4) & 0xF);
 		imp->il_imp = addr & 0xF;
 	}
-	imp->il_imp = htons(imp->il_imp);
+	imp->il_imp = htons(imp->il_imp);	/* network order! */
 }
 #endif

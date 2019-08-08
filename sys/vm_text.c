@@ -1,12 +1,72 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)vm_text.c	7.1 (Berkeley) 6/5/86
+ *	@(#)vm_text.c	6.6 (Berkeley) 6/8/85
  */
+#if	CMU
+ 
+/*
+ **********************************************************************
+ * HISTORY
+ * 17-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Added IBM code for Sailboat under switch ROMP.  This looks like
+ *	a silly feature which deals with shared text, but it should all
+ *	go with the new VM anyway, so no big deal.
+ *
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 15-May-85  Glenn Marcy (gm0w) at Carnegie-Mellon University
+ *	Upgraded to 4.2BSD.  Carried over changes below [V1(1)].
+ *
+ * 19-Feb-82  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_IINCR:  Changed inode reference count modifications to use
+ *	incr/decr macros to check for consistency (V3.04c).
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_ichk.h"
+#include "mach_vm.h"
+#endif	CMU
+
+#if	MACH_VM
+#else	MACH_VM
 
 #include "../machine/pte.h"
+
+#ifdef	romp
+#include "../machine/rosetta.h"
+#endif	romp
 
 #include "param.h"
 #include "systm.h"
@@ -23,75 +83,6 @@
 #include "uio.h"
 #include "exec.h"
 
-#define X_LOCK(xp) { \
-	while ((xp)->x_flag & XLOCK) { \
-		(xp)->x_flag |= XWANT; \
-		sleep((caddr_t)(xp), PSWP); \
-	} \
-	(xp)->x_flag |= XLOCK; \
-}
-#define	XUNLOCK(xp) { \
-	if ((xp)->x_flag & XWANT) \
-		wakeup((caddr_t)(xp)); \
-	(xp)->x_flag &= ~(XLOCK|XWANT); \
-}
-#define FREE_AT_HEAD(xp) { \
-	(xp)->x_forw = xhead; \
-	xhead = (xp); \
-	(xp)->x_back = &xhead; \
-	if (xtail == &xhead) \
-		xtail = &(xp)->x_forw; \
-	else \
-		(xp)->x_forw->x_back = &(xp)->x_forw; \
-}
-#define FREE_AT_TAIL(xp) { \
-	(xp)->x_back = xtail; \
-	*xtail = (xp); \
-	xtail = &(xp)->x_forw; \
-	/* x_forw is NULL */ \
-}
-#define	ALLOC(xp) { \
-	*((xp)->x_back) = (xp)->x_forw; \
-	if ((xp)->x_forw) \
-		(xp)->x_forw->x_back = (xp)->x_back; \
-	else \
-		xtail = (xp)->x_back; \
-	(xp)->x_forw = NULL; \
-	(xp)->x_back = NULL; \
-}
-
-/*
- * We place free text table entries on a free list.
- * All text images are treated as "sticky,"
- * and are placed on the free list (as an LRU cache) when unused.
- * They may be reclaimed from the free list until reused.
- * Files marked sticky are locked into the table, and are never freed.
- * For machines with limited swap space, this may result
- * in filling up swap, and thus we allow a limit
- * to be placed on the number of text images to cache.
- * (In that case, really should change the algorithm
- * for freeing a text when the cache is full;
- * should free least-recently-used text rather than current one.)
- */
-struct	text *xhead, **xtail;		/* text table free list */
-int	xcache;				/* number of "sticky" texts retained */
-int	maxtextcache = -1;		/* maximum number of "sticky" texts */
-struct	xstats xstats;			/* cache statistics */
-
-/*
- * initialize text table
- */
-xinit()
-{
-	register struct text *xp;
-
-	xtail = &xhead;
-	for (xp = text; xp < textNTEXT; xp++)
-		FREE_AT_TAIL(xp);
-	if (maxtextcache == -1)
-		maxtextcache = ntext;
-}
-
 /*
  * relinquish use of the shared text segment
  * of a process.
@@ -99,39 +90,32 @@ xinit()
 xfree()
 {
 	register struct text *xp;
+	register struct inode *ip;
 
-	if ((xp = u.u_procp->p_textp) == NULL)
+	if((xp=u.u_procp->p_textp) == NULL)
 		return;
-	xstats.free++;
-	X_LOCK(xp);
-	if (--xp->x_count == 0 && (xp->x_iptr->i_mode & ISVTX) == 0) {
-		if (xcache >= maxtextcache || xp->x_flag & XTRC ||
-		    xp->x_iptr->i_nlink == 0) {			/* XXX */
-			xp->x_rssize -= vmemfree(tptopte(u.u_procp, 0),
-				(int)u.u_tsize);
-			if (xp->x_rssize != 0)
-				panic("xfree rssize");
-			while (xp->x_poip)
-				sleep((caddr_t)&xp->x_poip, PSWP+1);
-			xp->x_flag &= ~XLOCK;
-			xuntext(xp);
-			FREE_AT_HEAD(xp);
-		} else {
-			if (xp->x_flag & XWRIT) {
-				xstats.free_cacheswap++;
-				xp->x_flag |= XUNUSED;
-			}
-			xcache++;
-			xstats.free_cache++;
-			xccdec(xp, u.u_procp);
-			FREE_AT_TAIL(xp);
-		}
+	xlock(xp);
+	ip = xp->x_iptr;
+	if(--xp->x_count==0 && (ip->i_mode&ISVTX)==0) {
+#ifndef	romp
+		xunlink(u.u_procp);
+#else	romp
+		xunlink(u.u_procp, 0);
+#endif	romp
+		xp->x_rssize -= vmemfree(tptopte(u.u_procp, 0), u.u_tsize);
+		if (xp->x_rssize != 0)
+			panic("xfree rssize");
+		ip->i_flag &= ~ITEXT;
+		irele(ip);
+		while (xp->x_poip)
+			sleep((caddr_t)&xp->x_poip, PSWP+1);
+		vsxfree(xp, (long)xp->x_size);
+		xp->x_flag &= ~XLOCK;
+		xp->x_iptr = NULL;
 	} else {
+		xp->x_flag &= ~XLOCK;
 		xccdec(xp, u.u_procp);
-		xstats.free_inuse++;
 	}
-	xunlink(u.u_procp);
-	XUNLOCK(xp);
 	u.u_procp->p_textp = NULL;
 }
 
@@ -151,46 +135,36 @@ xalloc(ip, ep, pagi)
 {
 	register struct text *xp;
 	register size_t ts;
+	register struct text *xp1;
 
 	if (ep->a_text == 0)
 		return;
-	xstats.alloc++;
-	while ((xp = ip->i_text) != NULL) {
-		if (xp->x_flag&XLOCK) {
-			/*
-			 * Wait for text to be unlocked,
-			 * then start over (may have changed state).
-			 */
-			xwait(xp);
+again:
+	xp1 = NULL;
+	for (xp = text; xp < textNTEXT; xp++) {
+		if(xp->x_iptr == NULL) {
+			if(xp1 == NULL)
+				xp1 = xp;
 			continue;
 		}
-		X_LOCK(xp);
-		if (xp->x_back) {
-			xstats.alloc_cachehit++;
-			ALLOC(xp);
-			xp->x_flag &= ~XUNUSED;
-			xcache--;
-		} else
-			xstats.alloc_inuse++;
-		xp->x_count++;
-		u.u_procp->p_textp = xp;
-		xlink(u.u_procp);
-		XUNLOCK(xp);
-		return;
+		if ((xp->x_count > 0 || (xp->x_iptr->i_mode&ISVTX)) &&
+		    xp->x_iptr == ip) {
+			if (xp->x_flag&XLOCK) {
+				xwait(xp);
+				goto again;
+			}
+			xlock(xp);
+			xp->x_count++;
+			u.u_procp->p_textp = xp;
+			xlink(u.u_procp);
+			xunlock(xp);
+			return;
+		}
 	}
-	xp = xhead;
-	if (xp == NULL) {
+	if((xp=xp1) == NULL) {
 		tablefull("text");
 		psignal(u.u_procp, SIGKILL);
 		return;
-	}
-	ALLOC(xp);
-	if (xp->x_iptr) {
-		xstats.alloc_cacheflush++;
-		if (xp->x_flag & XUNUSED)
-			xstats.alloc_unused++;
-		xuntext(xp);
-		xcache--;
 	}
 	xp->x_flag = XLOAD|XLOCK;
 	if (pagi)
@@ -206,8 +180,11 @@ xalloc(ip, ep, pagi)
 	xp->x_rssize = 0;
 	xp->x_iptr = ip;
 	ip->i_flag |= ITEXT;
-	ip->i_text = xp;
+#if	CS_ICHK
+	iincr_chk(ip);
+#else	CS_ICHK
 	ip->i_count++;
+#endif	CS_ICHK
 	u.u_procp->p_textp = xp;
 	xlink(u.u_procp);
 	if (pagi == 0) {
@@ -215,24 +192,28 @@ xalloc(ip, ep, pagi)
 		u.u_procp->p_flag |= SKEEP;
 		(void) rdwri(UIO_READ, ip,
 			(caddr_t)ctob(tptov(u.u_procp, 0)),
-			(int)ep->a_text, (off_t)sizeof (struct exec),
+			(int)ep->a_text, sizeof (struct exec),
 			2, (int *)0);
 		u.u_procp->p_flag &= ~SKEEP;
 	}
 	settprot(RO);
 	xp->x_flag |= XWRIT;
 	xp->x_flag &= ~XLOAD;
-	XUNLOCK(xp);
+	xunlock(xp);
 }
 
 /*
  * Lock and unlock a text segment from swapping
  */
 xlock(xp)
-	register struct text *xp;
+register struct text *xp;
 {
 
-	X_LOCK(xp);
+	while(xp->x_flag&XLOCK) {
+		xp->x_flag |= XWANT;
+		sleep((caddr_t)xp, PSWP);
+	}
+	xp->x_flag |= XLOCK;
 }
 
 /*
@@ -242,75 +223,63 @@ xwait(xp)
 register struct text *xp;
 {
 
-	X_LOCK(xp);
-	XUNLOCK(xp);
+	xlock(xp);
+	xunlock(xp);
 }
 
 xunlock(xp)
 register struct text *xp;
 {
 
-	XUNLOCK(xp);
+	if (xp->x_flag&XWANT)
+		wakeup((caddr_t)xp);
+	xp->x_flag &= ~(XLOCK|XWANT);
 }
 
 /*
- * Decrement the in-core usage count of a shared text segment,
- * which must be locked.  When the count drops to zero,
- * free the core space.
+ * Decrement the in-core usage count of a shared text segment.
+ * When it drops to zero, free the core space.
  */
 xccdec(xp, p)
-	register struct text *xp;
-	register struct proc *p;
+register struct text *xp;
+register struct proc *p;
 {
 
+	if (xp==NULL || xp->x_ccount==0)
+		return;
+	xlock(xp);
 	if (--xp->x_ccount == 0) {
 		if (xp->x_flag & XWRIT) {
-			vsswap(p, tptopte(p, 0), CTEXT, 0, (int)xp->x_size,
-			    (struct dmap *)0);
+			vsswap(p, tptopte(p, 0), CTEXT, 0, xp->x_size, (struct dmap *)0);
 			if (xp->x_flag & XPAGI)
-				(void)swap(p, xp->x_ptdaddr,
-				    (caddr_t)tptopte(p, 0),
-				    (int)xp->x_size * sizeof (struct pte),
+				swap(p, xp->x_ptdaddr, (caddr_t)tptopte(p, 0),
+				    xp->x_size * sizeof (struct pte),
 				    B_WRITE, B_PAGET, swapdev, 0);
 			xp->x_flag &= ~XWRIT;
 		} else
-			xp->x_rssize -= vmemfree(tptopte(p, 0),
-			    (int)xp->x_size);
+			xp->x_rssize -= vmemfree(tptopte(p, 0), xp->x_size);
 		if (xp->x_rssize != 0)
 			panic("text rssize");
 	}
+#ifndef	romp
+	xunlink(p);
+#else	romp
+	xunlink(p, 0);
+#endif	romp
+	xunlock(xp);
 }
 
 /*
- * Detach a process from the in-core text.
- * External interface to xccdec, used when swapping out a process.
- */
-xdetach(xp, p)
-	register struct text *xp;
-	struct proc *p;
-{
-
-	if (xp && xp->x_ccount != 0) {
-		X_LOCK(xp);
-		xccdec(xp, p);
-		xunlink(p);
-		XUNLOCK(xp);
-	}
-}
-
-/*
- * Free the swap image of all unused saved-text text segments
+ * free the swap image of all unused saved-text text segments
  * which are from device dev (used by umount system call).
- * If dev is NODEV, do all devices (used when rebooting).
  */
 xumount(dev)
-	register dev_t dev;
+register dev;
 {
 	register struct text *xp;
 
 	for (xp = text; xp < textNTEXT; xp++) 
-		if (xp->x_iptr != NULL &&
-		    (dev == xp->x_iptr->i_dev || dev == NODEV))
+		if (xp->x_iptr!=NULL && dev==xp->x_iptr->i_dev)
 			xuntext(xp);
 }
 
@@ -318,11 +287,15 @@ xumount(dev)
  * remove a shared text segment from the text table, if possible.
  */
 xrele(ip)
-	register struct inode *ip;
+register struct inode *ip;
 {
+	register struct text *xp;
 
-	if (ip->i_flag & ITEXT)
-		xuntext(ip->i_text);
+	if ((ip->i_flag&ITEXT)==0)
+		return;
+	for (xp = text; xp < textNTEXT; xp++)
+		if (ip==xp->x_iptr)
+			xuntext(xp);
 }
 
 /*
@@ -330,20 +303,21 @@ xrele(ip)
  * the use count must be zero.
  */
 xuntext(xp)
-	register struct text *xp;
+register struct text *xp;
 {
 	register struct inode *ip;
 
-	X_LOCK(xp);
-	if (xp->x_count == 0) {
-		ip = xp->x_iptr;
-		xp->x_iptr = NULL;
-		vsxfree(xp, (long)xp->x_size);
-		ip->i_flag &= ~ITEXT;
-		ip->i_text = NULL;
-		irele(ip);
+	xlock(xp);
+	if (xp->x_count) {
+		xunlock(xp);
+		return;
 	}
-	XUNLOCK(xp);
+	ip = xp->x_iptr;
+	xp->x_flag &= ~XLOCK;
+	xp->x_iptr = NULL;
+	vsxfree(xp, (long)xp->x_size);
+	ip->i_flag &= ~ITEXT;
+	irele(ip);
 }
 
 /*
@@ -361,9 +335,21 @@ xlink(p)
 	p->p_xlink = xp->x_caddr;
 	xp->x_caddr = p;
 	xp->x_ccount++;
+#ifdef	romp
+
+       /* switch to new address space for shared text */
+
+       p->p_sid0 = make410sid( xp );
+       if( p == u.u_procp )
+               set_segreg( 0, p->p_sid0 );
+#endif	romp
 }
 
+#ifndef	romp
 xunlink(p)
+#else	romp
+xunlink(p, isxrepl)
+#endif	romp
 	register struct proc *p;
 {
 	register struct text *xp = p->p_textp;
@@ -371,6 +357,17 @@ xunlink(p)
 
 	if (xp == 0)
 		return;
+#ifdef romp
+
+       /* switch from address space for shared text */
+
+       if (isxrepl==0) {
+               p->p_sid0 = makeP0sid(p);
+               if (p == u.u_procp)
+                       set_segreg(0, p->p_sid0);
+	}
+
+#endif romp
 	if (xp->x_caddr == p) {
 		xp->x_caddr = p->p_xlink;
 		p->p_xlink = 0;
@@ -396,7 +393,12 @@ xrepl(p, q)
 
 	if (xp == 0)
 		return;
+#ifndef	romp
 	xunlink(p);
+#else	romp
+	xunlink(p,1);
+#endif	romp
 	q->p_xlink = xp->x_caddr;
 	xp->x_caddr = q;
 }
+#endif	MACH_VM

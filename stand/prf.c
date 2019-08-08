@@ -1,11 +1,52 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)prf.c	7.1 (Berkeley) 6/5/86
+ *	@(#)prf.c	6.3 (Berkeley) 7/17/85
  */
 
+/*
+ **********************************************************************
+ * HISTORY
+ * 17-May-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded previous changes to 4.3.
+ *
+ * 01-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_CONS:  hooked character input/output through optional
+ *	virtual console.
+ *
+ **********************************************************************
+ */
+
+#include "../h/features.h"
 #include "../h/param.h"
 
 #include "../vax/mtpr.h"
@@ -83,9 +124,11 @@ number:
 		printn((u_long)b, *s++);
 		any = 0;
 		if (b) {
+			putchar('<');
 			while (i = *s++) {
 				if (b & (1 << (i-1))) {
-					putchar(any? ',' : '<');
+					if (any)
+						putchar(',');
 					any = 1;
 					for (; (c = *s) > 32; s++)
 						putchar(c);
@@ -93,8 +136,7 @@ number:
 					for (; *s > 32; s++)
 						;
 			}
-			if (any)
-				putchar('>');
+			putchar('>');
 		}
 		break;
 
@@ -134,12 +176,21 @@ printn(n, b)
 
 /*
  * Print a character on console.
+ * Attempts to save and restore device
+ * status.
+ *
+ * Whether or not printing is inhibited,
+ * the last MSGBUFS characters
+ * are saved in msgbuf for inspection later.
  */
 putchar(c)
 	register c;
 {
 	register s, timo;
-
+#if	CS_CONS
+	
+	vputc(c);
+#endif	CS_CONS
 	timo = 30000;
 	/*
 	 * Try waiting for the console tty to come ready,
@@ -163,9 +214,14 @@ getchar()
 {
 	register c;
 
+#if	CS_CONS
+	while ((c=vgetc()) < 0 && ((mfpr(RXCS)&RXCS_DONE) == 0 || (c=mfpr(RXDB)&0177) < 0))
+		;
+#else	CS_CONS
 	while((mfpr(RXCS)&RXCS_DONE) == 0)
 		;
 	c = mfpr(RXDB)&0177;
+#endif	CS_CONS
 	if (c=='\r')
 		c = '\n';
 	putchar(c);
@@ -181,6 +237,7 @@ gets(buf)
 	lp = buf;
 	for (;;) {
 		c = getchar() & 0177;
+	store:
 		switch(c) {
 		case '\n':
 		case '\r':
@@ -188,12 +245,6 @@ gets(buf)
 			*lp++ = '\0';
 			return;
 		case '\b':
-			if (lp > buf) {
-				lp--;
-				putchar(' ');
-				putchar('\b');
-			}
-			continue;
 		case '#':
 		case '\177':
 			lp--;

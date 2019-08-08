@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)quota.h	7.1 (Berkeley) 6/4/86
+ *	@(#)quota.h	6.2 (Berkeley) 6/8/85
  */
 
 /*
@@ -22,7 +49,7 @@
 struct quota {
 	struct	quota *q_forw, *q_back;	/* hash chain, MUST be first */
 	short	q_cnt;			/* ref count (# processes) */
-	uid_t	q_uid;			/* real uid of owner */
+	short	q_uid;			/* real uid of owner */
 	int	q_flags;		/* struct management flags */
 #define	Q_LOCK	0x01		/* quota struct locked (for disc i/o) */
 #define	Q_WANT	0x02		/* issue a wakeup when lock goes off */
@@ -90,7 +117,7 @@ struct	dquot {
 #define	DQ_BLKS		0x10		/* has been warned about blk limit */
 #define	DQ_INODS	0x20		/* has been warned about inode limit */
 	short	dq_cnt;			/* count of active references */
-	uid_t	dq_uid;			/* user this applies to */
+	short	dq_uid;			/* user this applies to */
 	dev_t	dq_dev;			/* filesystem this relates to */
 	struct dqblk dq_dqb;		/* actual usage & quotas */
 };

@@ -1,4 +1,31 @@
-/*	@(#)if_ddn.c	7.1 (Berkeley) 6/5/86 */
+/*
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*	@(#)if_ddn.c	6.2 (Berkeley) 9/16/85 */
 
 
 /************************************************************************\
@@ -79,6 +106,9 @@ Revision History:
 #include "../net/netisr.h"
 #include "../net/route.h"
 
+#ifdef	BBNNET
+#define	INET
+#endif
 #ifdef	INET
 #include "../netinet/in.h"
 #include "../netinet/in_systm.h"
@@ -274,7 +304,7 @@ caddr_t reg;
     register int delay_time;
 
 #ifdef lint
-    br = 0; cvec = br; br = cvec; ddnintr(0);
+    br = 0; cvec = br; br = cvec;
 #endif
 
     cvec = savevec = (uba_hd[numuba].uh_lastiv -= 4);	/* return vector */
@@ -599,6 +629,7 @@ ddnioctl(ifp, cmd, data)
 {
 	struct ifaddr *ifa = (struct ifaddr *) data;
 	int s = splimp(), error = 0;
+	struct endevice *enaddr;
 
 	switch (cmd) {
 
@@ -722,7 +753,7 @@ int unit;
     	if (chan > 1)
     	    ddn_data(unit, chan, cc, cnt);
     	else
-    	    ddn_supr(unit, chan, cc);
+    	    ddn_supr(unit, chan, cc, cnt);
 
       }
 
@@ -751,6 +782,7 @@ static void x25_init(ds)
 struct ddn_softc *ds;
   {
     struct mbuf *m;
+    register u_char *bp;
 
 #ifdef DDNDEBUG
 if (ddn_debug > 0)
@@ -768,7 +800,7 @@ printf("ddn%d: x25_init()\n", ds->ddn_if.if_unit);
 
     init_msg[3] = sizeof(init_msg) - 4;	/* set cmnd ext length */
 
-    bcopy((caddr_t)init_msg, mtod(m, caddr_t), sizeof(init_msg));
+    bcopy(init_msg, mtod(m, u_char *), sizeof(init_msg));
 
     m->m_len = sizeof(init_msg);	/* set msg length */
 
@@ -798,6 +830,7 @@ struct in_addr ip_addr;
   {
     register int lcn;
     register struct ddn_cb *dc;
+    struct mbuf *m_callbfr;
 
 #ifdef DDNDEBUG
 if (ddn_debug > 6)
@@ -1010,15 +1043,15 @@ register struct ddn_softc *ds;
 register struct ddn_cb *dc;
   {
     register struct mbuf *m_callbfr;
-    register caddr_t cb;
+    register u_char *cb;
 
     MGET(m_callbfr, M_DONTWAIT, MT_DATA);  /* try to get call cmnd buffer */
     if (m_callbfr == 0)
 	return(0);
 
-    cb = mtod(m_callbfr, caddr_t);
+    cb = mtod(m_callbfr, u_char *);
 
-    (void)convert_ip_addr(ds->ddn_ipaddr, cb_calling_addr);
+    convert_ip_addr(ds->ddn_ipaddr, cb_calling_addr);
 
     cb_protocol[0] = 4;
     cb_protocol[1] = X25_PROTO_IP;	/* protocol = IP */
@@ -1046,27 +1079,27 @@ register struct ddn_cb *dc;
     m_callbfr->m_len = cb_cmnd[3] + 4;
 
     /* copy command header */
-    bcopy((caddr_t)cb_cmnd, cb, 4);
+    bcopy(cb_cmnd, cb, 4);
     cb += 4;
 
     /* copy called address */
-    bcopy((caddr_t)cb_called_addr, cb, cb_called_addr[0] + 1);
+    bcopy(cb_called_addr, cb, cb_called_addr[0] + 1);
     cb += (cb_called_addr[0] + 1);
 
     /* copy calling address */
-    bcopy((caddr_t)cb_calling_addr, cb, cb_calling_addr[0] + 1);
+    bcopy(cb_calling_addr, cb, cb_calling_addr[0] + 1);
     cb += (cb_calling_addr[0] + 1);
 
     /* copy protocol */
-    bcopy((caddr_t)cb_protocol, cb, cb_protocol[0] + 1);
+    bcopy(cb_protocol, cb, cb_protocol[0] + 1);
     cb += (cb_protocol[0] + 1);
 
     /* copy facilities */
-    bcopy((caddr_t)cb_facilities, cb, cb_facilities[0] + 1);
+    bcopy(cb_facilities, cb, cb_facilities[0] + 1);
     cb += (cb_facilities[0] + 1);
 
     /* copy user data */
-    bcopy((caddr_t)cb_user_data, cb, cb_user_data[0] + 1);
+    bcopy(cb_user_data, cb, cb_user_data[0] + 1);
     cb += (cb_user_data[0] + 1);
 
     dc->dc_state = LC_CALL_PENDING;		/* set state */
@@ -1294,8 +1327,8 @@ int unit, chan, cc, rcnt;
 *									*
 \***********************************************************************/
 
-static void ddn_supr(unit, chan, cc)
-int unit, chan, cc;
+static void ddn_supr(unit, chan, cc, rcnt)
+int unit, chan, cc, rcnt;
 {
     register struct ddn_softc *ds = &ddn_softc[unit];
     u_char *p;
@@ -1419,11 +1452,11 @@ printf("\n");
     	    dc->dc_inaddr.s_addr = convert_x25_addr(cb_calling_addr);
     	    dc->dc_state = LC_DATA_IDLE;  /* set state */
     	    dc->dc_timer = TMO_DATA_IDLE; /* start timer */
-    	    send_supr(ds, ANSWER, lcn * 2, (int)p[2]); /* send answer */
+    	    send_supr(ds, ANSWER, lcn * 2, p[2]); /* send answer */
     	  }
     	else				/* if no free LCN's */
     	  {
-    	    send_supr(ds, CLEARVC, (int)p[2], 0); /* clear call */
+    	    send_supr(ds, CLEARVC, p[2], 0); /* clear call */
     	  }
     	break;
 
@@ -1432,7 +1465,7 @@ printf("\n");
     	dc = &(ds->ddn_cb[lcn]);
     	if (dc->dc_state != LC_CLR_PENDING) /* if no clear pending */
     	  {
-    	    send_supr(ds, CLEARLC, (int)p[1], 0);      /*   ack the clear */
+    	    send_supr(ds, CLEARLC, p[1], 0);      /*   ack the clear */
     	  }
     	dc->dc_state = LC_IDLE; /* set state */
     	dc->dc_timer = TMO_OFF; /* stop timer */
@@ -1445,11 +1478,11 @@ printf("\n");
     	break;
 
     case CLEARVC:			/* clear by VCN */
-    	send_supr(ds, CLEARVC, (int)p[1], 0); /* send clear ack */
+    	send_supr(ds, CLEARVC, p[1], 0); /* send clear ack */
     	break;
 
     case RESET:				/* X25 reset */
-	send_supr(ds, RESET_ACK, (int)p[1], 0); /* send reset ack */
+	send_supr(ds, RESET_ACK, p[1], 0); /* send reset ack */
     	printf("X25 RESET on lcn = %d\n", p[1] / 2); /* log it */
 	break;
 
@@ -1493,25 +1526,25 @@ printf("decode_ring()\n");
     /* called address */
     if ((cnt = *p + 1) > 16)	/* is called addr len legal? */
 	return(0);		/*   return false if not */
-    bcopy((caddr_t)p, (caddr_t)cb_called_addr, (unsigned)cnt); /* copy field */
+    bcopy(p, cb_called_addr, cnt); /* copy field */
     p += cnt;
 
     /* calling address */
     if ((cnt = *p + 1) > 16)	/* is calling addr len legal? */
 	return(0);		/*   return false if not */
-    bcopy((caddr_t)p, (caddr_t)cb_calling_addr, (unsigned)cnt); /* copy field */
+    bcopy(p, cb_calling_addr, cnt); /* copy field */
     p += cnt;
 
     /* protocol part of user data */
     if ((cnt = *p + 1) > 5)	/* is protocol len legal? */
 	return(0);		/*   return false if not */
-    bcopy((caddr_t)p, (caddr_t)cb_protocol, (unsigned)cnt); /* copy field */
+    bcopy(p, cb_protocol, cnt); /* copy field */
     p += cnt;
 
     /* facilities */
     if ((cnt = *p + 1) > 64)	/* is facilities len legal? */
 	return(0);		/*   return false if not */
-    bcopy((caddr_t)p, (caddr_t)cb_facilities, (unsigned)cnt); /* copy field */
+    bcopy(p, cb_facilities, cnt); /* copy field */
     p += cnt;
 
     /* ignore rest of user data for now */
@@ -1553,7 +1586,7 @@ printf("clear_lcn(%d)\n", dc->dc_lcn);
     	IF_DEQUEUE(&dc->dc_oq, m);
     	m_freem(m);
       }
-    send_supr(ds, CLEARLC, (int)dc->dc_lcn * 2, 0);    /* send clear msg */
+    send_supr(ds, CLEARLC, dc->dc_lcn * 2, 0);    /* send clear msg */
   }
 
 

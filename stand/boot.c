@@ -1,10 +1,58 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)boot.c	7.1 (Berkeley) 6/5/86
+ *	@(#)boot.c	6.4 (Berkeley) 8/8/85
+ *
+ **************************************************************************
+ * HISTORY
+ * 01-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_BOOT:  picked up the ULTRIX-32 boot options to pass in
+ *	the boot unit in the second byte of R10 and the partition in
+ *	the high 4 bits of R11 so so that these may be passed through
+ *	to UNIX for use in determining the root device;
+ *	CS_KDB:  changed copyunix() to save the symbol table after _end
+ *	if bit 2 (04) was supplied in the boot flags and pass its
+ *	top through to UNIX in R9.
+ *
+ * 20-Aug-85  Robert V Baron (rvb) at Carnegie-Mellon University
+ *	Allow code to be loaded directly into shared memory, by letting
+ *	the high 16 bits of "howto" (r11) specify a 64k boundary foR
+ *	loading to.
+ *	Pass the correct major/minor as r10 to the program that was
+ *	started.
+ **************************************************************************
  */
+
+#include "../h/features.h"
 
 #include "../h/param.h"
 #include "../h/inode.h"
@@ -38,20 +86,31 @@ char	devname[][2] = {
 	0,0,		/* 13 = rx */
 	'r','l',	/* 14 = rl */
 };
-#define	MAXTYPE	(sizeof(devname) / sizeof(devname[0]))
 
-#define	UNIX	"vmunix"
-char line[100];
+/*
+ * constants for converting a "minor" device numbers to unit number
+ * and partition number
+ */
+#define UNITSHIFT	16
+#define UNITMASK	0x1ff
+#define PARTITIONMASK	0x7
+#define PARTITIONSHIFT	3
+
+char line[100] = "xx(00,0)vmunix";
 
 int	retry = 0;
 
 main()
 {
-	register unsigned howto, devtype;	/* howto=r11, devtype=r10 */
-	int io, i;
+	register howto, devtype;	/* howto=r11, devtype=r10 */
+	int io;
 	register type, part, unit;
-	register char *cp;
-	long atol();
+#if	CS_BOOT
+	int bootdev;
+
+	bootdev = devtype;
+	devtype &= 0377;
+#endif	CS_BOOT
 
 #ifdef lint
 	howto = 0; devtype = 0;
@@ -60,23 +119,18 @@ main()
 #ifdef JUSTASK
 	howto = RB_ASKNAME|RB_SINGLE;
 #else
-	type = (devtype >> B_TYPESHIFT) & B_TYPEMASK;
-	unit = (devtype >> B_UNITSHIFT) & B_UNITMASK;
-	unit += 8 * ((devtype >> B_ADAPTORSHIFT) & B_ADAPTORMASK);
-	part = (devtype >> B_PARTITIONSHIFT) & B_PARTITIONMASK;
-	if ((howto & RB_ASKNAME) == 0) {
-		if (type >= 0 && type <= MAXTYPE && devname[type][0]) {
-			cp = line;
-			*cp++ = devname[type][0];
-			*cp++ = devname[type][1];
-			*cp++ = '(';
-			if (unit >= 10)
-				*cp++ = unit / 10 + '0';
-			*cp++ = unit % 10 + '0';
-			*cp++ = ',';
-			*cp++ = part + '0';
-			*cp++ = ')';
-			strcpy(cp, UNIX);
+	type = devtype & 0xff;
+	unit = (int)((unsigned)devtype >> UNITSHIFT) & UNITMASK;
+	part = unit & PARTITIONMASK;
+	unit = unit >> PARTITIONSHIFT;
+	if ((howto&RB_ASKNAME)==0) {
+		if (type >= 0 && type < sizeof(devname) / 2
+		    && devname[type][0]) {
+			line[0] = devname[type][0];
+			line[1] = devname[type][1];
+			line[3] = unit / 10 + '0';
+			line[4] = unit % 10 + '0';
+			line[6] = part + '0';
 		} else
 			howto = RB_SINGLE|RB_ASKNAME;
 	}
@@ -89,57 +143,87 @@ main()
 			printf(": %s\n", line);
 		io = open(line, 0);
 		if (io >= 0) {
-			if (howto & RB_ASKNAME) {
-				/*
-				 * Build up devtype register to pass on to
-				 * booted program.
-				 */ 
-				cp = line;
-				for (i = 0; i <= MAXTYPE; i++)
-					if ((devname[i][0] == cp[0]) && 
-					    (devname[i][1] == cp[1]))
-					    	break;
-				if (i <= MAXTYPE) {
-					devtype = i << B_TYPESHIFT;
-					cp += 3;
-					i = *cp++ - '0';
-					if (*cp >= '0' && *cp <= '9')
-						i = i * 10 + *cp++ - '0';
-					cp++;
-					devtype |= ((i % 8) << B_UNITSHIFT);
-					devtype |= ((i / 8) << B_ADAPTORSHIFT);
-					devtype |= atol(cp) << B_PARTITIONSHIFT;
-				}
+#if	CS_BOOT
+		    char *index();
+
+		    loadpcs();
+		    for (devtype=0;
+			 devtype<(sizeof(devname)/sizeof(devname[0]));
+			 devtype++)
+		    {
+			if (line[0] == devname[devtype][0] &&
+			    line[1] == devname[devtype][1])
+			{
+			    /*
+			     *  If boot file has owner execute permission,
+			     *  always read in symbol table.
+			     */
+			    if (iob[io-3].i_ino.i_mode&IEXEC)
+				howto |= RB_KDB;
+			    copyunix(howto,
+				     (bootdev&0x80000000)
+				     +
+				     (devtype<<8)
+				     +
+				     (atoi(index(line, '(')+1)<<3)
+				     +
+				     atoi(index(line, ',')+1),
+				     io);
 			}
-			devtype |= B_DEVMAGIC;
-			loadpcs();
-			copyunix(howto, devtype, io);
-			close(io);
-			howto = RB_SINGLE|RB_ASKNAME;
+		    }
+		    close(io);
 		}
+#else	CS_BOOT
+			copyunix(howto, io);
+#endif	CS_BOOT
 		if (++retry > 2)
 			howto = RB_SINGLE|RB_ASKNAME;
 	}
 }
 
 /*ARGSUSED*/
+#if	CS_BOOT
 copyunix(howto, devtype, io)
-	register howto, devtype, io;	/* howto=r11, devtype=r10 */
+	register howto, devtype;	/* howto=r11, devtype=r10 */
+	int io;
+#else	CS_BOOT
+copyunix(howto, io)
+	register howto, io;
+#endif	CS_BOOT
 {
 	struct exec x;
+#if	CS_KDB
+	register int esym;		/* esym=r9 */
+#endif	CS_KDB
 	register int i;
 	char *addr;
+#if	CS_BOOT
+	char *base = (char *) (howto & 0xffff0000); /* high 16 bits */
 
+	addr = base;
+#endif	CS_BOOT
 	i = read(io, (char *)&x, sizeof x);
 	if (i != sizeof x ||
 	    (x.a_magic != 0407 && x.a_magic != 0413 && x.a_magic != 0410))
 		_stop("Bad format\n");
+#if	CS_BOOT
+	if (base)
+		printf("%x // ", base);
+#endif	CS_BOOT
 	printf("%d", x.a_text);
 	if (x.a_magic == 0413 && lseek(io, 0x400, 0) == -1)
 		goto shread;
+#if	CS_BOOT
+	if (read(io, addr, x.a_text) != x.a_text)
+#else	CS_BOOT
 	if (read(io, (char *)0, x.a_text) != x.a_text)
+#endif	CS_BOOT
 		goto shread;
+#if	CS_BOOT
+	addr += x.a_text;
+#else	CS_BOOT
 	addr = (char *)x.a_text;
+#endif	CS_BOOT
 	if (x.a_magic == 0413 || x.a_magic == 0410)
 		while ((int)addr & CLOFSET)
 			*addr++ = 0;
@@ -148,13 +232,43 @@ copyunix(howto, devtype, io)
 		goto shread;
 	addr += x.a_data;
 	printf("+%d", x.a_bss);
+#if	CS_KDB
+	if ((howto&RB_KDB) && x.a_syms)
+	{
+		for (i = 0; i < x.a_bss; i++)
+			*addr++ = 0;
+		*((int *)addr) = x.a_syms;
+		addr += sizeof(x.a_syms);
+		printf("[+%d", x.a_syms);
+		if (read(io, addr, x.a_syms) != x.a_syms)
+			goto shread;
+		addr += x.a_syms;
+		if (read(io, addr, sizeof(int)) != sizeof(int))
+			goto shread;
+		i = *((int *)addr) - sizeof(int);
+		addr += sizeof(int);
+		printf("+%d]", i);
+		if (read(io, addr, i) != i)
+			goto shread;
+		addr += i;
+		esym = ((int)(addr+sizeof(int)-1))&~(sizeof(int)-1);
+		x.a_bss = 0;
+	}
+	else
+		howto &= ~RB_KDB;
+#endif	CS_KDB
 	x.a_bss += 128*512;	/* slop */
 	for (i = 0; i < x.a_bss; i++)
 		*addr++ = 0;
 	x.a_entry &= 0x7fffffff;
+#if	CS_BOOT
+	printf(" start 0x%x\n", base + x.a_entry);
+	(*((int (*)()) (base + x.a_entry)))();
+#else	CS_BOOT
 	printf(" start 0x%x\n", x.a_entry);
 	(*((int (*)()) x.a_entry))();
-	return;
+#endif	CS_BOOT
+	_exit();
 shread:
 	_stop("Short read\n");
 }

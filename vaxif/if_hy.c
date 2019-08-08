@@ -1,5 +1,36 @@
 /*
- *	@(#)if_hy.c	7.1 (Berkeley) 6/5/86
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
+ * All rights reserved.  The Berkeley software License Agreement
+ * specifies the terms and conditions for redistribution.
+ *
+ *	@(#)if_hy.c	6.6 (Berkeley) 9/16/85
  */
 
 /*
@@ -86,6 +117,9 @@
 #include "../net/netisr.h"
 #include "../net/route.h"
 
+#ifdef	BBNNET
+#define	INET
+#endif
 #ifdef	INET
 #include "../netinet/in.h"
 #include "../netinet/in_systm.h"
@@ -559,6 +593,9 @@ hyoutput(ifp, m0, dst)
 	register struct hym_hdr *hym;
 	register struct mbuf *m;
 	register char *mp;
+#ifdef HYROUTE
+	register struct hy_route *r = &hy_route[ifp->if_unit];
+#endif
 	int dlen;	/* packet size, incl hardware header, but not sw header */
 	int error = 0;
 	int s;
@@ -1322,15 +1359,14 @@ hylog(code, len, ptr)
 		hy_log.hyl_enable = HYL_DISABLED;
 		hy_log.hyl_count = hy_log.hyl_icount;
 	}
-	p += len;
 	if (hy_log.hyl_wait != 0) {		/* wakeup HYGETLOG if wanted */
-		if (hy_log.hyl_wait <= p - hy_log.hyl_ptr) {
+		hy_log.hyl_wait -= (p - hy_log.hyl_ptr) + len;
+		if (hy_log.hyl_wait <= 0) {
 			wakeup((caddr_t)&hy_log);
 			hy_log.hyl_wait = 0;
-		} else
-			hy_log.hyl_wait -= p - hy_log.hyl_ptr;
+		}
 	}
-	hy_log.hyl_ptr = p;
+	hy_log.hyl_ptr = p + len;
 out:
 	splx(s);
 }
@@ -1458,7 +1494,7 @@ hyioctl(ifp, cmd, data)
 				goto out;
 			}
 			hy_log.hyl_wait = sgl->hylsg_cmd;
-			sleep((caddr_t)&hy_log, PZERO - 1);
+			sleep((caddr_t)&hy_log);
 		}
 
 		if (copyout((caddr_t)&hy_log, sgl->hylsg_ptr, sizeof(hy_log))) {

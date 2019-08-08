@@ -1,10 +1,57 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)socketvar.h	7.1 (Berkeley) 6/4/86
+ *	@(#)socketvar.h	6.6 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgrade to 4.3.
+ *
+ * 02-Aug-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT:  Added process signal fields for now.
+ *	[V1(1)]
+*
+ **********************************************************************
+ */
+ 
+#ifdef	KERNEL
+#include "cs_compat.h"
+#else	KERNEL
+#include <sys/features.h>
+#endif	KERNEL
+#endif	CMU
 
 /*
  * Kernel structure per socket.
@@ -40,17 +87,22 @@ struct socket {
  * Variables for socket buffering.
  */
 	struct	sockbuf {
-		u_short	sb_cc;		/* actual chars in buffer */
-		u_short	sb_hiwat;	/* max actual char count */
-		u_short	sb_mbcnt;	/* chars of mbufs used */
-		u_short	sb_mbmax;	/* max chars of mbufs to use */
-		u_short	sb_lowat;	/* low water mark (not used yet) */
+		short	sb_cc;		/* actual chars in buffer */
+		short	sb_hiwat;	/* max actual char count */
+		short	sb_mbcnt;	/* chars of mbufs used */
+		short	sb_mbmax;	/* max chars of mbufs to use */
+		short	sb_lowat;	/* low water mark (not used yet) */
 		short	sb_timeo;	/* timeout (not used yet) */
 		struct	mbuf *sb_mb;	/* the mbuf chain */
 		struct	proc *sb_sel;	/* process selecting read/write */
+#if	CS_COMPAT
+		struct	proc *sb_sigp;	/* signal process */
+		short	sb_sigpid;	/* signal process ID */
+		short	sb_signum;	/* signal number */
+#endif	CS_COMPAT
 		short	sb_flags;	/* flags, see below */
 	} so_rcv, so_snd;
-#define	SB_MAX		65535		/* max chars in sockbuf */
+#define	SB_MAX		32767		/* max chars in sockbuf */
 #define	SB_LOCK		0x01		/* lock on data queue (so_rcv only) */
 #define	SB_WANT		0x02		/* someone is waiting to lock */
 #define	SB_WAIT		0x04		/* someone is waiting for data/space */
@@ -58,7 +110,7 @@ struct socket {
 #define	SB_COLL		0x10		/* collision selecting */
 	short	so_timeo;		/* connection timeout */
 	u_short	so_error;		/* error affecting connection */
-	u_short	so_oobmark;		/* chars to oob mark */
+	short	so_oobmark;		/* chars to oob mark */
 	short	so_pgrp;		/* pgrp for signals */
 };
 
@@ -84,8 +136,7 @@ struct socket {
 
 /* how much space is there in a socket buffer (so->so_snd or so->so_rcv) */
 #define	sbspace(sb) \
-    (MIN((int)((sb)->sb_hiwat - (sb)->sb_cc),\
-	 (int)((sb)->sb_mbmax - (sb)->sb_mbcnt)))
+    (MIN((sb)->sb_hiwat-(sb)->sb_cc, ((sb)->sb_mbmax-(sb)->sb_mbcnt)))
 
 /* do we have to send all at once on a socket? */
 #define	sosendallatonce(so) \
@@ -93,16 +144,14 @@ struct socket {
 
 /* can we read something from so? */
 #define	soreadable(so) \
-    ((so)->so_rcv.sb_cc || ((so)->so_state & SS_CANTRCVMORE) || \
-	(so)->so_qlen || (so)->so_error)
+    ((so)->so_rcv.sb_cc || ((so)->so_state & SS_CANTRCVMORE) || (so)->so_qlen)
 
 /* can we write something to so? */
 #define	sowriteable(so) \
     (sbspace(&(so)->so_snd) > 0 && \
 	(((so)->so_state&SS_ISCONNECTED) || \
 	  ((so)->so_proto->pr_flags&PR_CONNREQUIRED)==0) || \
-     ((so)->so_state & SS_CANTSENDMORE) || \
-     (so)->so_error)
+     ((so)->so_state & SS_CANTSENDMORE))
 
 /* adjust counters in sb reflecting allocation of m */
 #define	sballoc(sb, m) { \
@@ -143,4 +192,6 @@ struct socket {
 
 #ifdef KERNEL
 struct	socket *sonewconn();
+struct	mbuf *sbdrop();
+struct	mbuf *sbdroprecord();
 #endif

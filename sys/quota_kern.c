@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)quota_kern.c	7.1 (Berkeley) 6/5/86
+ *	@(#)quota_kern.c	6.6 (Berkeley) 6/8/85
  */
 
 #ifdef QUOTA
@@ -122,7 +149,7 @@ qtinit()
  */
 struct quota *
 getquota(uid, lookuponly, nodq)
-	register uid_t uid;
+	register uid;
 	int lookuponly, nodq;
 {
 	register struct quota *q;
@@ -304,7 +331,6 @@ delquota(q)
  */
 struct dquot *
 discquota(uid, ip)
-	uid_t uid;
 	register struct inode *ip;
 {
 	register struct dquot *dq;
@@ -355,7 +381,7 @@ discquota(uid, ip)
 	dq->dq_flags = DQ_LOCK;
 	ILOCK(ip);
 	fail = rdwri(UIO_READ, ip, (caddr_t)&dq->dq_dqb, sizeof (struct dqblk),
-	    (off_t)uid * sizeof (struct dqblk), 1, (int *)0);
+	    uid * sizeof (struct dqblk), 1, (int *)0);
 	IUNLOCK(ip);
 	if (dq->dq_flags & DQ_WANT)
 		wakeup((caddr_t)dq);
@@ -385,7 +411,6 @@ discquota(uid, ip)
  */
 struct dquot *
 dqalloc(uid, dev)
-	uid_t uid;
 	dev_t dev;
 {
 	register struct dquot *dq;
@@ -559,7 +584,7 @@ putdq(mp, dq, free)
 		panic("lost quota file");
 	ILOCK(ip);
 	(void) rdwri(UIO_WRITE, ip, (caddr_t)&dq->dq_dqb, sizeof (struct dqblk),
-	    (off_t)dq->dq_uid * sizeof (struct dqblk), 1, (int *)0);
+	    dq->dq_uid * sizeof (struct dqblk), 1, (int *)0);
 	IUNLOCK(ip);
 	if (dq->dq_flags & DQ_WANT)
 		wakeup((caddr_t)dq);
@@ -573,7 +598,7 @@ putdq(mp, dq, free)
  */
 struct quota *
 qfind(uid)
-	register uid_t uid;
+	register int uid;
 {
 	register struct quota *q;
 	register struct qhash *qh;

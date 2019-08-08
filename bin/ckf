@@ -1,0 +1,5 @@
+#! /bin/csh -f
+foreach f ($*)
+    echo $f
+    awk -f lib/check.awk $f
+end

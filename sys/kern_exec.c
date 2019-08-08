@@ -1,14 +1,133 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)kern_exec.c	7.1 (Berkeley) 6/5/86
+ *	@(#)kern_exec.c	6.14 (Berkeley) 8/12/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 11-Jun-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	romp: Added stupid exect() call for adb on the RT.
+ *
+ *  1-Jun-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Use VM_OBJECT_NULL in calls to vm_map_find instead of creating a
+ *	dummy object.  (The VM code will generate an object when [and
+ *	if] necessary).
+ *
+ * 23-May-86  David Golub (dbg) at Carnegie-Mellon University
+ *	Use text pager to protect executing files from being overwritten
+ *	(using the ITEXT bit).
+ *
+ * 14-May-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Use rlim_cur instead of rlim_max for stack size during exec.
+ *
+ *  6-May-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Changed to use vm_allocate_with_pager (rather than vm_allocate).
+ *
+ * 25-Apr-86  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT: Changed to clear 4.2 mode across exec() only when
+ *	UMODE_ALLOWOLD has been set or if ISVTX bit is on in mode.
+ *
+ * 23-Apr-86  David Golub (dbg) at Carnegie-Mellon University
+ *	Protect code before zeroing bss - we will get fewer objects
+ *	this way if the process forks.
+ *
+ * 14-Apr-86  David Golub (dbg) at Carnegie-Mellon University
+ *	Lock and disable interrupts around call to vm_map_copy.
+ *
+ * 28-Mar-86  David Golub (dbg) at Carnegie-Mellon University
+ *	Remember that the loader's page-size is still
+ *	(CLSIZE*NBPG), and that text, data and bss end on the old
+ *	page boundaries, not the new ones (or we'd have to relink all
+ *	programs whenever we changed the page size!).
+ *
+ * 22-Mar-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Merged VM and Romp versions.
+ *
+ * 25-Feb-86  David Golub (dbg) at Carnegie-Mellon University
+ *	Converted to new virtual memory code.
+ *
+ * 21-Feb-86  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT:  Changed to clear read directory bit in accounting
+ *	flags across execs.
+ *	[V1(1)]
+ *
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 23-Nov-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_RFS:  enabled remote namei() processing for all
+ *	routines in this module.
+ *	[V1(1)]
+ *
+ * 12-Aug-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT:  Changed to reset signal trampoline code across
+ *	execs.
+ *
+ * 26-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT:  Changed to clear 4.1/4.2 mode bits in accounting
+ *	flags across execs.
+ *	[V1(1)]
+ *
+ * 25-May-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT:  changed to clear SJCSIG across exec().
+ *	[V1(1)].
+ *
+ * 21-May-85  Glenn Marcy (gm0w) at Carnegie-Mellon University
+ *	Upgraded from 4.1BSD.  Carried over changes below.
+ *
+ *	CS_XONLY:  Added setting of execute only bit and clearing of
+ *	trace bit in process status if image is not readable (V3.00).
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_compat.h"
+#include "cs_rfs.h"
+#include "cs_xonly.h"
+
+#include "mach_only.h"
+#include "mach_vm.h"
+#endif	CMU
 
 #include "../machine/reg.h"
 #include "../machine/pte.h"
+#ifdef	romp
+#include "../machine/scr.h"
+#else	romp
 #include "../machine/psl.h"
+#endif	romp
 
 #include "param.h"
 #include "systm.h"
@@ -26,10 +145,44 @@
 #include "uio.h"
 #include "acct.h"
 #include "exec.h"
+#if	CS_RFS
+ 
+/*
+ *  Force all namei() calls to permit remote names since this module has
+ *  been updated.
+ */
+#undef	namei
+#define	namei	rnamei
+#endif	CS_RFS
+
+#ifdef	romp
+#include "../machine/debug.h"
+#endif	romp
 
 #ifdef vax
 #include "../vax/mtpr.h"
 #endif
+
+#if	MACH_VM
+#include "../h/task.h"
+#include "../h/thread.h"
+
+#include "../vm/vm_param.h"
+#include "../vm/vm_map.h"
+#include "../vm/vm_object.h"
+#include "../vm/vm_kern.h"
+#include "../vm/vm_user.h"
+#include "../h/zalloc.h"
+extern struct zone	*arg_zone;
+
+#define	LOADER_PAGE_SIZE	(CLSIZE*NBPG)
+#define loader_round_page(x)	((vm_offset_t)((((vm_offset_t)(x)) \
+						+ LOADER_PAGE_SIZE - 1) \
+					& ~(LOADER_PAGE_SIZE-1)))
+#define loader_trunc_page(x)	((vm_offset_t)(((vm_offset_t)(x)) \
+					& ~(LOADER_PAGE_SIZE-1)))
+
+#endif	MACH_VM
 
 /*
  * exec system call, with and without environments.
@@ -46,18 +199,32 @@ execv()
 	execve();
 }
 
+#ifdef romp
+
+exect()	/* New RXTUnix system call for execve with single step active */
+{
+	execve();
+	if( u.u_error );
+	else u.u_ar0[ICSCS] |= ICSCS_INSTSTEP;
+}
+
+#endif romp
+
 execve()
 {
 	register nc;
 	register char *cp;
 	register struct buf *bp;
 	register struct execa *uap;
-	int na, ne, ucp, ap, cc;
-	unsigned len;
+	int na, ne, ucp, ap, len, cc;
 	int indir, uid, gid;
 	char *sharg;
 	struct inode *ip;
+#if	MACH_VM
+	caddr_t exec_args;
+#else	MACH_VM
 	swblk_t bno;
+#endif	MACH_VM
 	char cfname[MAXCOMLEN + 1];
 #define	SHSIZE	32
 	char cfarg[SHSIZE];
@@ -73,8 +240,12 @@ execve()
 	ndp->ni_dirp = ((struct execa *)u.u_ap)->fname;
 	if ((ip = namei(ndp)) == NULL)
 		return;
+#if	MACH_VM
+	exec_args = NULL;
+#else	MACH_VM
 	bno = 0;
 	bp = 0;
+#endif	MACH_VM
 	indir = 0;
 	uid = u.u_uid;
 	gid = u.u_gid;
@@ -110,7 +281,7 @@ execve()
 	 */
 	exdata.ex_shell[0] = '\0';	/* for zero length files */
 	u.u_error = rdwri(UIO_READ, ip, (caddr_t)&exdata, sizeof (exdata),
-	    (off_t)0, 1, &resid);
+	    0, 1, &resid);
 	if (u.u_error)
 		goto bad;
 #ifndef lint
@@ -120,12 +291,14 @@ execve()
 		goto bad;
 	}
 #endif
-	switch ((int)exdata.ex_exec.a_magic) {
+	switch (exdata.ex_exec.a_magic) {
 
+#ifndef	romp  /* Complain and I'll fix it.  When I get time, that is. -BjB */
 	case 0407:
 		exdata.ex_exec.a_data += exdata.ex_exec.a_text;
 		exdata.ex_exec.a_text = 0;
 		break;
+#endif	romp
 
 	case 0413:
 	case 0410:
@@ -191,6 +364,11 @@ execve()
 	nc = 0;
 	cc = 0;
 	uap = (struct execa *)u.u_ap;
+#if	MACH_VM
+	exec_args = zalloc(arg_zone);
+	cp = exec_args;		/* running pointer for copy */
+	cc = NCARGS;		/* size of exec_args */
+#else	MACH_VM
 	bno = rmalloc(argmap, (long)ctod(clrnd((int)btoc(NCARGS))));
 	if (bno == 0) {
 		swkill(u.u_procp, "exec: no swap space");
@@ -198,6 +376,7 @@ execve()
 	}
 	if (bno % CLSIZE)
 		panic("execa rmalloc");
+#endif	MACH_VM
 	/*
 	 * Copy arguments into file in argdev area.
 	 */
@@ -230,6 +409,12 @@ execve()
 			break;
 		}
 		do {
+#if	MACH_VM
+			if (nc >= NCARGS-1) {
+				error = E2BIG;
+				break;
+			}
+#else	MACH_VM
 			if (cc <= 0) {
 				/*
 				 * We depend on NCARGS being a multiple of
@@ -246,12 +431,12 @@ execve()
 				bp = getblk(argdev, bno + ctod(nc/NBPG), cc);
 				cp = bp->b_un.b_addr;
 			}
+#endif	MACH_VM
 			if (sharg) {
-				error = copystr(sharg, cp, (unsigned)cc, &len);
+				error = copystr(sharg, cp, cc, &len);
 				sharg += len;
 			} else {
-				error = copyinstr((caddr_t)ap, cp, (unsigned)cc,
-				    &len);
+				error = copyinstr((caddr_t)ap, cp, cc, &len);
 				ap += len;
 			}
 			cp += len;
@@ -260,19 +445,33 @@ execve()
 		} while (error == ENOENT);
 		if (error) {
 			u.u_error = error;
+#if	MACH_VM
+#else	MACH_VM
 			if (bp)
 				brelse(bp);
 			bp = 0;
+#endif	MACH_VM
 			goto badarg;
 		}
 	}
+#if	MACH_VM
+#else	MACH_VM
 	if (bp)
 		bdwrite(bp);
 	bp = 0;
+#endif	MACH_VM
 	nc = (nc + NBPW-1) & ~(NBPW-1);
 	getxfile(ip, &exdata.ex_exec, nc + (na+4)*NBPW, uid, gid);
 	if (u.u_error) {
 badarg:
+#if	MACH_VM
+	/*
+	 *	NOTE: to prevent a race condition, getxfile had
+	 *	to temporarily unlock the inode.  If new code needs to
+	 *	be inserted here before the iput below, and it needs
+	 *	to deal with the inode, keep this in mind.
+	 */
+#else	MACH_VM
 		for (cc = 0; cc < nc; cc += CLSIZE*NBPG) {
 			bp = baddr(argdev, bno + ctod(cc/NBPG), CLSIZE*NBPG);
 			if (bp) {
@@ -282,6 +481,7 @@ badarg:
 				bp = 0;
 			}
 		}
+#endif	MACH_VM
 		goto bad;
 	}
 	iput(ip);
@@ -296,6 +496,10 @@ badarg:
 	(void) suword((caddr_t)ap, na-ne);
 	nc = 0;
 	cc = 0;
+#if	MACH_VM
+	cp = exec_args;
+	cc = NCARGS;
+#endif	MACH_VM
 	for (;;) {
 		ap += NBPW;
 		if (na == ne) {
@@ -306,6 +510,8 @@ badarg:
 			break;
 		(void) suword((caddr_t)ap, ucp);
 		do {
+#if	MACH_VM
+#else	MACH_VM
 			if (cc <= 0) {
 				if (bp)
 					brelse(bp);
@@ -315,8 +521,8 @@ badarg:
 				bp->b_flags &= ~B_DELWRI;	/* cancel io */
 				cp = bp->b_un.b_addr;
 			}
-			error = copyoutstr(cp, (caddr_t)ucp, (unsigned)cc,
-			    &len);
+#endif	MACH_VM
+			error = copyoutstr(cp, (caddr_t)ucp, cc, &len);
 			ucp += len;
 			cp += len;
 			nc += len;
@@ -332,7 +538,7 @@ badarg:
 	 * remain held through p_sigmask.
 	 */
 	while (u.u_procp->p_sigcatch) {
-		nc = ffs((long)u.u_procp->p_sigcatch);
+		nc = ffs(u.u_procp->p_sigcatch);
 		u.u_procp->p_sigcatch &= ~sigmask(nc);
 		u.u_signal[nc] = SIG_DFL;
 	}
@@ -358,7 +564,33 @@ badarg:
 	/*
 	 * Remember file name for accounting.
 	 */
+#if	CS_COMPAT
+	u.u_acflag &= ~(AFORK|A41MODE|AREADIR);
+#if	MACH_ONLY
+	/*
+	 *	always clear 4.2 mode.
+	 */
+#else	MACH_ONLY
+	if (u.u_modes&UMODE_ALLOWOLD)
+#endif	MACH_ONLY
+		u.u_acflag &= ~(A42MODE);
+	{
+	    	extern int nsigcode[5];
+
+		/*
+		 *  The signal trampoline code may have been set to the
+		 *  4.1 version if the previous process used the old
+		 *  signal mechanism.  If so, reset it to the 4.2 version
+		 *  until this process indicates otherwise (e.g. by
+		 *  making an old signal call itself).
+		 */
+		if (u.u_pcb.pcb_sigc[0] != nsigcode[0])
+			bcopy((caddr_t)nsigcode, (caddr_t)u.u_pcb.pcb_sigc,
+			      sizeof(nsigcode));
+	}
+#else	CS_COMPAT
 	u.u_acflag &= ~AFORK;
+#endif	CS_COMPAT
 	if (indir)
 		bcopy((caddr_t)cfname, (caddr_t)u.u_comm, MAXCOMLEN);
 	else {
@@ -368,10 +600,15 @@ badarg:
 		    (unsigned)(ndp->ni_dent.d_namlen + 1));
 	}
 bad:
+#if	MACH_VM
+	if (exec_args)
+		zfree(arg_zone, exec_args);
+#else	MACH_VM
 	if (bp)
 		brelse(bp);
 	if (bno)
 		rmfree(argmap, (long)ctod(clrnd((int) btoc(NCARGS))), bno);
+#endif	MACH_VM
 	if (ip)
 		iput(ip);
 }
@@ -386,12 +623,23 @@ getxfile(ip, ep, nargc, uid, gid)
 {
 	size_t ts, ds, ids, uds, ss;
 	int pagi;
+#if	MACH_VM
+	vm_offset_t	addr;
+	vm_size_t	size;
+	vm_map_t	my_map;
+	vm_map_t	temp_map;
+	vm_pager_id_t	pager_id;
+	int		cluster_size;
+	vm_size_t	copy_size;
+	vm_offset_t	copy_end, data_end;
+	int		s;
+#endif	MACH_VM
 
 	if (ep->a_magic == 0413)
 		pagi = SPAGI;
 	else
 		pagi = 0;
-	if (ip->i_text && (ip->i_text->x_flag & XTRC)) {
+	if (ip->i_flag & IXMOD) {			/* XXX */
 		u.u_error = ETXTBSY;
 		goto bad;
 	}
@@ -420,6 +668,8 @@ getxfile(ip, ep, nargc, uid, gid)
 	uds = clrnd(btoc(ep->a_bss));
 	ds = clrnd(btoc(ep->a_data + ep->a_bss));
 	ss = clrnd(SSIZE + btoc(nargc));
+#if	MACH_VM
+#else	MACH_VM
 	if (chksize((unsigned)ts, (unsigned)ids, (unsigned)uds, (unsigned)ss))
 		goto bad;
 
@@ -449,8 +699,171 @@ getxfile(ip, ep, nargc, uid, gid)
 			sleep((caddr_t)u.u_procp, PZERO - 1);
 		u.u_procp->p_flag &= ~(SVFDONE|SKEEP);
 	}
+#endif	MACH_VM
+
+#if	CS_XONLY || CS_COMPAT
+	u.u_procp->p_flag &= ~(SPAGI|SSEQL|SUANOM|SOUSIG
+#if	CS_COMPAT
+			       |SJCSIG
+#endif	CS_COMPAT
+#if	CS_XONLY
+			       |SXONLY
+#endif	CS_XONLY
+			      );
+#else	CS_XONLY || CS_COMPAT
 	u.u_procp->p_flag &= ~(SPAGI|SSEQL|SUANOM|SOUSIG);
+#endif	CS_XONLY || CS_COMPAT
+#if	CS_XONLY
+	if (access(ip, IREAD))
+	{
+		u.u_procp->p_flag |= SXONLY;
+		u.u_procp->p_flag &= ~STRC;
+		u.u_error = 0;
+	}
+#endif	CS_XONLY
+#if	CS_COMPAT
+	if (ip->i_mode&ISVTX)
+		u.u_acflag &= ~(A42MODE);
+#endif	CS_COMPAT
 	u.u_procp->p_flag |= pagi;
+#if	MACH_VM
+
+#define	unix_break_size	(8*1024*1024)	/* XXX must be constant for persistent shared memory */
+#define	unix_stack_size	(u.u_rlimit[RLIMIT_STACK].rlim_cur)
+
+#ifdef	romp
+	romp_getxfile(ip, ep, pagi);
+#else	romp
+
+	my_map = current_task()->map;
+	/*
+	 *	Even if we are exec'ing the same image (the rem server
+	 *	does this, for example), we don't have to unlock the
+	 *	inode; deallocating it doesn't require it to be locked.
+	 *
+	 */
+	vm_map_remove(my_map, vm_map_min(my_map), trunc_page((vm_offset_t) &u));
+/*	vm_map_remove(my_map, vm_map_min(my_map),
+				vm_map_min(my_map) + unix_break_size);*/
+	
+	/*
+	 *	Allocate low-memory stuff: text, data, bss, space for brk calls.
+	 *	Read text&data into lowest part, then make text read-only.
+	 */
+
+	addr = VM_MIN_ADDRESS;
+/*	size = (vm_size_t) unix_break_size;
+	size = round_page(size);*/
+
+	size = round_page(ep->a_text + ep->a_data + ep->a_bss);
+	if (vm_map_find(my_map, VM_OBJECT_NULL, (vm_offset_t) 0, &addr, size, FALSE)
+			!= KERN_SUCCESS)
+		panic("getxfile: cannot find space for exec image");
+
+	u.u_error = 0;
+
+	if (pagi == 0) {	/* not demand paged */
+		/*
+		 *	Read in the data segment (0407 & 0410).  It goes on the
+		 *	next loader_page boundary after the text.
+		 */
+		u.u_error = rdwri(UIO_READ, ip,
+				(caddr_t) VM_MIN_ADDRESS + loader_round_page(ep->a_text),
+				(int)ep->a_data,
+				(int)(sizeof(struct exec)+ep->a_text),
+				0, (int *)0);
+		/*
+		 *	Read in text segment if necessary (0410), 
+		 *	and read-protect it.
+		 */
+		if ((u.u_error == 0) && (ep->a_text > 0)) {
+			u.u_error = rdwri(UIO_READ, ip,
+				(caddr_t) VM_MIN_ADDRESS,
+				(int)ep->a_text,
+				(int)sizeof(struct exec), 2, (int *) 0);
+			if (u.u_error == 0) {
+				(void) vm_map_protect(my_map,
+					 VM_MIN_ADDRESS,
+					 VM_MIN_ADDRESS + trunc_page(ep->a_text),
+					 VM_PROT_READ|VM_PROT_EXECUTE,
+					 FALSE);
+			}
+		}
+	}
+	else {
+		/*
+		 *	Allocate a region backed by the exec'ed inode.
+		 */
+
+		copy_size = round_page(ep->a_text + ep->a_data);
+
+		temp_map = vm_map_create(pmap_create(copy_size), VM_MIN_ADDRESS,
+				VM_MIN_ADDRESS + copy_size, TRUE);
+		pager_id = text_pager_setup(ip);
+		addr = VM_MIN_ADDRESS;
+		if (vm_allocate_with_pager(temp_map, &addr, copy_size, FALSE,
+		    vm_pager_text, pager_id, (vm_offset_t) 1024) != KERN_SUCCESS)
+			panic("getxfile: cannot map text file into user address space");
+		/*
+		 *	Copy the region into the target address map, so that it is a
+		 *	copy(on-write) of the file.
+		 */
+		s = splvm();
+
+		if (vm_map_copy(my_map, temp_map, VM_MIN_ADDRESS, copy_size,
+			addr, FALSE, FALSE) != KERN_SUCCESS)	/* XXX */
+				panic("getxfile: vm_map_copy of inode region failed\n");
+
+		splx(s);
+
+		vm_map_deallocate(temp_map);
+		/*
+		 *	Read-protect just the text region.  Do this before 
+		 *	we zero the bss area, so that we have only one copy
+		 *	of the text.
+		 */
+
+		(void) vm_map_protect(my_map,
+			 VM_MIN_ADDRESS,
+			 VM_MIN_ADDRESS + trunc_page(ep->a_text),
+			 VM_PROT_READ|VM_PROT_EXECUTE,
+			 FALSE);
+
+		/*
+		 *	If the data segment does not end on a VM page boundary,
+		 *	we have to clear the remainder of the VM page it ends on
+		 *	so that the bss segment will (correctly) be zero.
+		 *	The loader has already guaranteed that the (text+data)
+		 *	segment ends on a loader_page boundary.
+		 */
+
+		data_end = VM_MIN_ADDRESS + loader_round_page(ep->a_text + ep->a_data);
+		copy_end = VM_MIN_ADDRESS + copy_size;
+		if (copy_end > data_end) {
+			/*
+			 *	Unfortunately, we have to unlock the inode, since the
+			 *	inode pager locks it!  (Yes, this bzero will fault on
+			 *	the inode to bring in part of the text.)
+			 */
+			iunlock(ip);
+			bzero((caddr_t)data_end, (vm_size_t) copy_end - data_end);
+			ilock(ip);
+		}
+	}
+
+	/*
+	 *	Create the stack.  (Deallocate the old one and create a 
+	 *	new one).
+	 */
+
+	size = round_page(unix_stack_size);
+	addr = trunc_page((vm_offset_t)USRSTACK - size);
+	vm_map_remove(my_map, addr, addr + size);
+	if (vm_map_find(my_map, VM_OBJECT_NULL, (vm_offset_t) 0, &addr, size, FALSE) != KERN_SUCCESS)
+		panic("getxfile: cannot find space for stack");
+
+#endif	romp
+#else	MACH_VM
 	u.u_dmap = u.u_cdmap;
 	u.u_smap = u.u_csmap;
 	vgetvm(ts, ds, ss);
@@ -460,13 +873,13 @@ getxfile(ip, ep, nargc, uid, gid)
 		    rdwri(UIO_READ, ip,
 			(char *)ctob(dptov(u.u_procp, 0)),
 			(int)ep->a_data,
-			(off_t)(sizeof (struct exec) + ep->a_text),
+			(int)(sizeof (struct exec) + ep->a_text),
 			0, (int *)0);
 	xalloc(ip, ep, pagi);
 	if (pagi && u.u_procp->p_textp)
 		vinifod((struct fpte *)dptopte(u.u_procp, 0),
 		    PG_FTEXT, u.u_procp->p_textp->x_iptr,
-		    (long)(1 + ts/CLSIZE), (size_t)btoc(ep->a_data));
+		    (long)(1 + ts/CLSIZE), (int)btoc(ep->a_data));
 
 #ifdef vax
 	/* THIS SHOULD BE DONE AT A LOWER LEVEL, IF AT ALL */
@@ -475,6 +888,7 @@ getxfile(ip, ep, nargc, uid, gid)
 
 	if (u.u_error)
 		swkill(u.u_procp, "exec: I/O error mapping pages");
+#endif	MACH_VM
 	/*
 	 * set SUID/SGID protections, if no tracing
 	 */
@@ -491,3 +905,145 @@ getxfile(ip, ep, nargc, uid, gid)
 bad:
 	return;
 }
+
+#ifdef	MACH_VM
+#ifdef	romp
+romp_getxfile(ip, ep, pagi)
+	struct inode	*ip;
+	struct exec	*ep;
+	int		pagi;
+{
+	vm_map_t	my_map, temp_map;
+	vm_pager_id_t	pager_id;
+	vm_offset_t	addr;
+	long		data_end, copy_end, size, text_size, data_size;
+	long		file_size;
+
+	my_map = current_task()->map;
+
+	/*
+	 *	This is how unix processes are mapped onto romp/rosetta:
+	 *
+	 *	0 - 0x10000000				text
+	 *	0x10000000 - 0x10800000			data/bss
+	 *	USRSTACK - unix_stack_size - USRSTACK	stack
+	 */
+
+#define DATA_START	0x10000000
+
+	/*
+	 *	Deallocate the previous text, data, bss & stack segments.
+	 *
+	 *	Q: What about lisp processes which validate stuff above
+	 *	   UAREA?  Soln: move the U-Area......
+	 */
+
+	vm_map_remove(my_map, vm_map_min(my_map),
+				UAREA);
+
+	/*
+	 *	Allocate enough space for everything (esp. since
+	 *	we don't really know what to allocate anyway).
+	 */
+
+	addr = VM_MIN_ADDRESS;
+	if (vm_map_find(my_map, VM_OBJECT_NULL, (vm_offset_t) 0, &addr,
+				round_page(ep->a_text), FALSE)
+			!= KERN_SUCCESS)
+		panic("getxfile: cannot find space for text segment");
+
+	addr = DATA_START;
+	size = round_page(ep->a_data + ep->a_bss);
+	if (vm_map_find(my_map, VM_OBJECT_NULL, (vm_offset_t) 0,
+			&addr, size, FALSE)
+			!= KERN_SUCCESS)
+		panic("getxfile: cannot find space for data/bss");
+
+	u.u_error = 0;
+
+	/*
+	 *	Map the text into the temp map.
+	 */
+
+	file_size = round_page(ep->a_text)  + round_page(ep->a_data);
+	temp_map = vm_map_create(pmap_create(file_size), VM_MIN_ADDRESS,
+				VM_MIN_ADDRESS + file_size, TRUE);
+
+	pager_id = text_pager_setup(ip);
+	addr = VM_MIN_ADDRESS;
+	text_size = round_page(ep->a_text);
+	if (vm_allocate_with_pager(temp_map, &addr, text_size, FALSE,
+	    vm_pager_text, pager_id,(vm_offset_t) 2048) != KERN_SUCCESS)
+		panic("getxfile: cannot map text file");
+	/*
+	 *	Copy the text into the target address map, so that it is a
+	 *	copy(on-write) of the file.
+	 */
+	if (vm_map_copy(my_map, temp_map, VM_MIN_ADDRESS, text_size,
+			addr, FALSE, FALSE) != KERN_SUCCESS)	/* XXX */
+		panic("getxfile: vm_map_copy of text failed\n");
+
+	/*
+	 *	Now copy the data segment.
+	 */
+	pager_id = inode_pager_setup(ip);
+	addr = round_page(ep->a_text); 
+	data_size = round_page(ep->a_data);
+	if (vm_allocate_with_pager(temp_map, &addr, data_size, FALSE,
+	    	vm_pager_inode, pager_id,
+		(vm_offset_t) loader_round_page(ep->a_text) + 2048) 
+	     != KERN_SUCCESS)
+		panic("getxfile: cannot map data from file");
+
+	if (vm_map_copy(my_map, temp_map, DATA_START, data_size,
+			VM_MIN_ADDRESS + text_size,
+			FALSE, FALSE) != KERN_SUCCESS)	/* XXX */
+		panic("getxfile: vm_map_copy of data region failed\n");
+
+	vm_map_deallocate(temp_map);
+
+	/*
+	 *	If the data segment does not end on a VM page boundary,
+	 *	we have to clear the remainder of the VM page it ends on
+	 *	so that the bss segment will (correctly) be zero.
+	 *	The loader has already guaranteed that the (text+data)
+	 *	segment ends on a loader_page boundary.
+	 */
+
+	data_end = DATA_START + loader_round_page(ep->a_data);
+	copy_end = DATA_START + round_page(ep->a_data);
+	if (copy_end > data_end) {
+		/*
+		 *	Unfortunately, we have to unlock the inode, since the
+		 *	inode pager locks it!  (Yes, this bzero will fault on
+		 *	the inode to bring in part of the text.)
+		 */
+		iunlock(ip);
+		bzero((caddr_t)data_end, (vm_size_t) copy_end - data_end);
+		ilock(ip);
+	}
+	/*
+	 *	Reprotect just the text region.
+	 *	Does nothing if there isn't one (407 execs).
+	 */
+
+	(void) vm_map_protect(my_map,
+		 VM_MIN_ADDRESS,
+		 VM_MIN_ADDRESS + trunc_page(ep->a_text),
+		 VM_PROT_READ|VM_PROT_EXECUTE,
+		 FALSE);
+
+	/*
+	 *	Create the stack.  (Deallocate the old one and create a new one).
+	 */
+
+	size = round_page(unix_stack_size);
+	addr = trunc_page((vm_offset_t)USRSTACK - size);
+	vm_map_remove(my_map, addr, addr + size);
+	if (vm_map_find(my_map, VM_OBJECT_NULL, (vm_offset_t) 0,
+			&addr, size, FALSE) != KERN_SUCCESS)
+		panic("getxfile: cannot find space for stack");
+
+}
+#endif	romp
+#endif	MACH_VM

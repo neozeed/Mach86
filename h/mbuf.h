@@ -1,15 +1,61 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)mbuf.h	7.1 (Berkeley) 6/4/86
+ *	@(#)mbuf.h	6.9 (Berkeley) 9/16/85
  */
+#if	CMU
 
+/*
+ ************************************************************************
+ * HISTORY
+ * 25-Feb-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Installed VM changes.
+ *
+ ************************************************************************
+ */
+#ifdef	KERNEL
+#include "mach_vm.h"
+#else	KERNEL
+#include <sys/features.h>
+#endif	KERNEL
+#endif	CMU
 /*
  * Constants related to memory allocator.
  */
+#ifdef BBNNET
+#define MSIZE		256
+#else
 #define	MSIZE		128			/* size of an mbuf */
+#endif
 
 #define	MMINOFF		12			/* mbuf header length */
 #define	MTAIL		4
@@ -85,44 +131,20 @@ struct mbuf {
 	  else \
 		(m) = m_more(i, t); \
 	  splx(ms); }
-/*
- * Mbuf page cluster macros.
- * MCLALLOC allocates mbuf page clusters.
- * Note that it works only with a count of 1 at the moment.
- * MCLGET adds such clusters to a normal mbuf.
- * m->m_len is set to CLBYTES upon success.
- * MCLFREE frees clusters allocated by MCLALLOC.
- */
-#define	MCLALLOC(m, i) \
+#define	MCLGET(m, i) \
 	{ int ms = splimp(); \
 	  if ((m)=mclfree) \
 	     {++mclrefcnt[mtocl(m)];mbstat.m_clfree--;mclfree = (m)->m_next;} \
 	  splx(ms); }
-#define	M_HASCL(m)	((m)->m_off >= MSIZE)
-#define	MTOCL(m)	((struct mbuf *)(mtod((m), int)&~CLOFSET))
-
-#define	MCLGET(m) \
-	{ struct mbuf *p; \
-	  if (mclfree == 0) \
-		(void)m_clalloc(1, MPG_CLUSTERS, M_DONTWAIT); \
-	  MCLALLOC(p, 1); \
-	  if (p) { \
-		(m)->m_off = (int)p - (int)(m); \
-		(m)->m_len = CLBYTES; \
-	  } \
-	}
-#define	MCLFREE(m) { \
-	if (--mclrefcnt[mtocl(m)] == 0) \
-	    { (m)->m_next = mclfree;mclfree = (m);mbstat.m_clfree++;} \
-	}
 #define	MFREE(m, n) \
 	{ int ms = splimp(); \
 	  if ((m)->m_type == MT_FREE) panic("mfree"); \
 	  mbstat.m_mtypes[(m)->m_type]--; mbstat.m_mtypes[MT_FREE]++; \
 	  (m)->m_type = MT_FREE; \
-	  if (M_HASCL(m)) { \
-		(n) = MTOCL(m); \
-		MCLFREE(n); \
+	  if ((m)->m_off >= MSIZE) { \
+		(n) = (struct mbuf *)(mtod(m, int)&~CLOFSET); \
+		if (--mclrefcnt[mtocl(n)] == 0) \
+		    { (n)->m_next = mclfree;mclfree = (n);mbstat.m_clfree++;} \
 	  } \
 	  (n) = (m)->m_next; (m)->m_next = mfree; \
 	  (m)->m_off = 0; (m)->m_act = 0; mfree = (m); \
@@ -145,8 +167,13 @@ struct mbstat {
 };
 
 #ifdef	KERNEL
+#if	MACH_VM
+struct mbuf *mbutl, embutl;	/* virtual address of net free mem */
+struct pte *Mbmap;		/* page tables to map Netutl */
+#else	MACH_VM
 extern	struct mbuf mbutl[];		/* virtual address of net free mem */
 extern	struct pte Mbmap[];		/* page tables to map Netutl */
+#endif	MACH_VM
 struct	mbstat mbstat;
 int	nmbclusters;
 struct	mbuf *mfree, *mclfree;

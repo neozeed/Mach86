@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)raw_ip.c	7.1 (Berkeley) 6/5/86
+ *	@(#)raw_ip.c	6.6 (Berkeley) 6/8/85
  */
 
 #include "param.h"
@@ -94,59 +121,9 @@ rip_output(m0, so)
 		ip->ip_src.s_addr = 0;
 	ip->ip_dst = ((struct sockaddr_in *)&rp->rcb_faddr)->sin_addr;
 	ip->ip_ttl = MAXTTL;
-	return (ip_output(m, rp->rcb_options, &rp->rcb_route, 
-	   (so->so_options & SO_DONTROUTE) | IP_ALLOWBROADCAST));
+	return (ip_output(m, (struct mbuf *)0, &rp->rcb_route, 
+	   IP_ROUTETOIF|IP_ALLOWBROADCAST));
 bad:
 	m_freem(m);
-	return (error);
-}
-
-/*
- * Raw IP socket option processing.
- */
-rip_ctloutput(op, so, level, optname, m)
-	int op;
-	struct socket *so;
-	int level, optname;
-	struct mbuf **m;
-{
-	int error = 0;
-	register struct rawcb *rp = sotorawcb(so);
-
-	if (level != IPPROTO_IP)
-		error = EINVAL;
-	else switch (op) {
-
-	case PRCO_SETOPT:
-		switch (optname) {
-		case IP_OPTIONS:
-			return (ip_pcbopts(&rp->rcb_options, *m));
-
-		default:
-			error = EINVAL;
-			break;
-		}
-		break;
-
-	case PRCO_GETOPT:
-		switch (optname) {
-		case IP_OPTIONS:
-			*m = m_get(M_WAIT, MT_SOOPTS);
-			if (rp->rcb_options) {
-				(*m)->m_off = rp->rcb_options->m_off;
-				(*m)->m_len = rp->rcb_options->m_len;
-				bcopy(mtod(rp->rcb_options, caddr_t),
-				    mtod(*m, caddr_t), (unsigned)(*m)->m_len);
-			} else
-				(*m)->m_len = 0;
-			break;
-		default:
-			error = EINVAL;
-			break;
-		}
-		break;
-	}
-	if (op == PRCO_SETOPT)
-		(void)m_free(*m);
 	return (error);
 }

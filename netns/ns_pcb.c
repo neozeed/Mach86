@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1984, 1985, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ns_pcb.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ns_pcb.c	6.4 (Berkeley) 8/9/85
  */
 
 #include "param.h"
@@ -94,8 +121,8 @@ ns_pcbconnect(nsp, nam)
 	struct mbuf *nam;
 {
 	struct ns_ifaddr *ia;
+	struct sockaddr_ns *ifaddr;
 	register struct sockaddr_ns *sns = mtod(nam, struct sockaddr_ns *);
-	register struct ns_addr *dst;
 
 	if (nam->m_len != sizeof (*sns))
 		return (EINVAL);
@@ -104,21 +131,21 @@ ns_pcbconnect(nsp, nam)
 	if (sns->sns_port==0 || ns_nullhost(sns->sns_addr))
 		return (EADDRNOTAVAIL);
 	if (ns_nullhost(nsp->nsp_laddr) &&
-	    (!ns_neteq(nsp->nsp_lastdst, sns->sns_addr))) {
-		register struct route *ro;
-		struct ifnet *ifp;
-		ro = &nsp->nsp_route;
-		dst = &satons_addr(ro->ro_dst);
+	    ((*(long *)&nsp->nsp_lastnet)!=ns_netof(sns->sns_addr))) {
+		ia = (struct ns_ifaddr *)ifa_ifwithnet((struct sockaddr *)sns);
+		if (ia == 0) {
+			register struct route *ro;
+			struct ifnet *ifp;
 
-		ia = ns_iaonnetof(&sns->sns_addr);
-		if (ia == 0 ||
-			(ia->ia_ifp->if_flags & IFF_UP) == 0) {
 			/* 
 			 * If route is known or can be allocated now,
 			 * our src addr is taken from the i/f, else punt.
 			 */
+			ro = &nsp->nsp_route;
+#define	satosns(sa)	((struct sockaddr_ns *)(sa))
 			if (ro->ro_rt &&
-				!ns_hosteq(*dst, sns->sns_addr)) {
+				!ns_hosteq(satosns(&ro->ro_dst)->sns_addr,
+					sns->sns_addr)) {
 				RTFREE(ro->ro_rt);
 				ro->ro_rt = (struct rtentry *)0;
 			}
@@ -126,8 +153,8 @@ ns_pcbconnect(nsp, nam)
 			    (ifp = ro->ro_rt->rt_ifp) == (struct ifnet *)0) {
 				/* No route yet, so try to acquire one */
 				ro->ro_dst.sa_family = AF_NS;
-				*dst = sns->sns_addr;
-				dst->x_port = 0;
+				satosns(&ro->ro_dst)->sns_addr =
+					sns->sns_addr;
 				rtalloc(ro);
 				if (ro->ro_rt == 0)
 					ifp = (struct ifnet *)0;
@@ -143,32 +170,10 @@ ns_pcbconnect(nsp, nam)
 				ia = ns_ifaddr;
 			if (ia == 0)
 				return (EADDRNOTAVAIL);
-		} else if (ro->ro_rt) {
-			if (ns_neteq(*dst, sns->sns_addr)) {
-				/*
-				 * This assume that we have no GH
-				 * type routes.
-				 */
-				if (ro->ro_rt->rt_flags & RTF_HOST) {
-					if (!ns_hosteq(*dst, sns->sns_addr))
-						goto re_route;
-
-				}
-				if ((ro->ro_rt->rt_flags & RTF_GATEWAY) == 0) {
-					dst->x_host = sns->sns_addr.x_host;
-				}
-				/* 
-				 * Otherwise, we go through the same gateway
-				 * and dst is already set up.
-				 */
-			} else {
-			re_route:
-				RTFREE(ro->ro_rt);
-				ro->ro_rt = (struct rtentry *)0;
-			}
 		}
-		nsp->nsp_laddr.x_net = satons_addr(ia->ia_addr).x_net;
-		nsp->nsp_lastdst = sns->sns_addr;
+		ifaddr = satosns(&ia->ia_addr);
+		nsp->nsp_laddr.x_net = ifaddr->sns_addr.x_net;
+		nsp->nsp_lastnet = sns->sns_addr.x_net;
 	}
 	if (ns_pcblookup(&sns->sns_addr, nsp->nsp_lport, 0))
 		return (EADDRINUSE);
@@ -263,7 +268,6 @@ ns_pcbnotify(dst, errno, notify, param)
 	splx(s);
 }
 
-#ifdef notdef
 /*
  * After a routing change, flush old routing
  * and allocate a (hopefully) better one.
@@ -281,7 +285,6 @@ ns_rtchange(nsp)
 	}
 	/* SHOULD NOTIFY HIGHER-LEVEL PROTOCOLS */
 }
-#endif
 
 struct nspcb *
 ns_pcblookup(faddr, lport, wildp)

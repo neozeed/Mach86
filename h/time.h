@@ -1,10 +1,53 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)time.h	7.1 (Berkeley) 6/4/86
+ *	@(#)time.h	6.4 (Berkeley) 6/24/85
  */
+#if	CMU
+/*
+ ************************************************************************
+ * HISTORY
+ * 27-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Restored the "struct tm" definition, we need it in kern_clock.
+ *
+ ************************************************************************
+ */
+
+#ifdef	KERNEL
+#include "cs_generic.h"
+#else	KERNEL
+#include <sys/features.h>
+#endif	KERNEL
+#endif	CMU
 
 /*
  * Structure returned by gettimeofday(2) system call,
@@ -54,3 +97,19 @@ struct	itimerval {
 #ifndef KERNEL
 #include <time.h>
 #endif
+#if	CS_GENERIC && KERNEL
+/*
+ * Structure returned by gmtime and localtime calls (see ctime(3)).
+ */
+struct tm {
+	int	tm_sec;
+	int	tm_min;
+	int	tm_hour;
+	int	tm_mday;
+	int	tm_mon;
+	int	tm_year;
+	int	tm_wday;
+	int	tm_yday;
+	int	tm_isdst;
+};
+#endif	CS_GENERIC && KERNEL

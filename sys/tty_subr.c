@@ -1,10 +1,51 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)tty_subr.c	7.1 (Berkeley) 6/5/86
+ *	@(#)tty_subr.c	6.10 (Berkeley) 6/8/85
  */
+#if	CMU
+
+/*
+ ************************************************************************
+ * HISTORY
+ * 29-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Reenabled putw for multiplexed files.  Will hopefully go away
+ *	when multiplexed files go away.
+ *
+ ************************************************************************
+ */
+
+#include "cs_compat.h"
+#endif	CMU
 
 #include "param.h"
 #include "systm.h"
@@ -33,7 +74,7 @@ getc(p)
 		c = *p->c_cf++ & 0377;
 		if (--p->c_cc<=0) {
 			bp = (struct cblock *)(p->c_cf-1);
-			bp = (struct cblock *)((int)bp & ~CROUND);
+			bp = (struct cblock *) ((int)bp & ~CROUND);
 			p->c_cf = NULL;
 			p->c_cl = NULL;
 			bp->c_next = cfreelist;
@@ -57,7 +98,7 @@ getc(p)
 		}
 	}
 	splx(s);
-	return (c);
+	return(c);
 }
 
 /*
@@ -74,18 +115,18 @@ q_to_b(q, cp, cc)
 	char *acp;
 
 	if (cc <= 0)
-		return (0);
+		return(0);
 	s = spltty();
 	if (q->c_cc <= 0) {
 		q->c_cc = 0;
 		q->c_cf = q->c_cl = NULL;
 		splx(s);
-		return (0);
+		return(0);
 	}
 	acp = cp;
 
 	while (cc) {
-		nc = sizeof (struct cblock) - ((int)q->c_cf & CROUND);
+		nc = sizeof(struct cblock) - ((int)q->c_cf & CROUND);
 		nc = MIN(nc, cc);
 		nc = MIN(nc, q->c_cc);
 		(void) bcopy(q->c_cf, cp, (unsigned)nc);
@@ -120,7 +161,7 @@ q_to_b(q, cp, cc)
 		}
 	}
 	splx(s);
-	return (cp-acp);
+	return(cp-acp);
 }
 
 /*
@@ -160,8 +201,10 @@ ndqb(q, flag)
 	}
 out:
 	splx(s);
-	return (cc);
+	return(cc);
 }
+
+
 
 /*
  * Flush cc bytes from q.
@@ -175,8 +218,9 @@ ndflush(q, cc)
 	int rem, s;
 
 	s = spltty();
-	if (q->c_cc <= 0)
+	if (q->c_cc <= 0) {
 		goto out;
+	}
 	while (cc>0 && q->c_cc) {
 		bp = (struct cblock *)((int)q->c_cf & ~CROUND);
 		if ((int)bp == (((int)q->c_cl-1) & ~CROUND)) {
@@ -231,7 +275,7 @@ putc(c, p)
 	if ((cp = p->c_cl) == NULL || p->c_cc < 0 ) {
 		if ((bp = cfreelist) == NULL) {
 			splx(s);
-			return (-1);
+			return(-1);
 		}
 		cfreelist = bp->c_next;
 		cfreecount -= CBSIZE;
@@ -241,7 +285,7 @@ putc(c, p)
 		bp = (struct cblock *)cp - 1;
 		if ((bp->c_next = cfreelist) == NULL) {
 			splx(s);
-			return (-1);
+			return(-1);
 		}
 		bp = bp->c_next;
 		cfreelist = bp->c_next;
@@ -253,8 +297,10 @@ putc(c, p)
 	p->c_cc++;
 	p->c_cl = cp;
 	splx(s);
-	return (0);
+	return(0);
 }
+
+
 
 /*
  * copy buffer to clist.
@@ -271,7 +317,7 @@ b_to_q(cp, cc, q)
 	int acc;
 
 	if (cc <= 0)
-		return (0);
+		return(0);
 	acc = cc;
 	s = spltty();
 	if ((cq = q->c_cl) == NULL || q->c_cc < 0) {
@@ -285,7 +331,7 @@ b_to_q(cp, cc, q)
 
 	while (cc) {
 		if (((int)cq & CROUND) == 0) {
-			bp = (struct cblock *)cq - 1;
+			bp = (struct cblock *) cq - 1;
 			if ((bp->c_next = cfreelist) == NULL) 
 				goto out;
 			bp = bp->c_next;
@@ -294,7 +340,7 @@ b_to_q(cp, cc, q)
 			bp->c_next = NULL;
 			cq = bp->c_info;
 		}
-		nc = MIN(cc, sizeof (struct cblock) - ((int)cq & CROUND));
+		nc = MIN(cc, sizeof(struct cblock) - ((int)cq & CROUND));
 		(void) bcopy(cp, cq, (unsigned)nc);
 		cp += nc;
 		cq += nc;
@@ -396,10 +442,16 @@ catq(from, to)
 	}
 }
 
+#if	CS_COMPAT
+/*
+ *	Well, 4.3 doesn't need these, but multiplex files do.
+ */
+#define	unneeded
+#endif	CS_COMPAT
 #ifdef unneeded
 /*
- * Integer (short) get/put using clists.
- * Note dependency on byte order.
+ * Integer (short) get/put
+ * using clists
  */
 typedef	u_short word_t;
 
@@ -413,23 +465,15 @@ getw(p)
 		return(-1);
 	if (p->c_cc & 01) {
 		c = getc(p);
-#if defined(vax)
-		return (c | (getc(p)<<8));
-#else
-		return (getc(p) | (c<<8));
-#endif
+		return(c | (getc(p)<<8));
 	}
 	s = spltty();
-#if defined(vax)
 	c = *((word_t *)p->c_cf);
-#else
-	c = (((u_char *)p->c_cf)[1] << 8) | ((u_char *)p->c_cf)[0];
-#endif
-	p->c_cf += sizeof (word_t);
-	p->c_cc -= sizeof (word_t);
+	p->c_cf += sizeof(word_t);
+	p->c_cc -= sizeof(word_t);
 	if (p->c_cc <= 0) {
 		bp = (struct cblock *)(p->c_cf-1);
-		bp = (struct cblock *)((int)bp & ~CROUND);
+		bp = (struct cblock *) ((int)bp & ~CROUND);
 		p->c_cf = NULL;
 		p->c_cl = NULL;
 		bp->c_next = cfreelist;
@@ -469,13 +513,8 @@ putw(c, p)
 		return(-1);
 	}
 	if (p->c_cc & 01) {
-#if defined(vax)
 		(void) putc(c, p);
 		(void) putc(c>>8, p);
-#else
-		(void) putc(c>>8, p);
-		(void) putc(c, p);
-#endif
 	} else {
 		if ((cp = p->c_cl) == NULL || p->c_cc < 0 ) {
 			if ((bp = cfreelist) == NULL) {
@@ -498,14 +537,9 @@ putw(c, p)
 			bp->c_next = NULL;
 			cp = bp->c_info;
 		}
-#if defined(vax)
 		*(word_t *)cp = c;
-#else
-		((u_char *)cp)[0] = c>>8;
-		((u_char *)cp)[1] = c;
-#endif
-		p->c_cl = cp + sizeof (word_t);
-		p->c_cc += sizeof (word_t);
+		p->c_cl = cp + sizeof(word_t);
+		p->c_cc += sizeof(word_t);
 	}
 	splx(s);
 	return (0);

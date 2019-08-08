@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)if_dmc.c	7.1 (Berkeley) 6/5/86
+ *	@(#)if_dmc.c	6.7 (Berkeley) 9/16/85
  */
 
 #include "dmc.h"
@@ -31,7 +58,6 @@
 #include "tty.h"
 #include "protosw.h"
 #include "socket.h"
-#include "syslog.h"
 #include "vmmac.h"
 #include "errno.h"
 
@@ -39,10 +65,12 @@
 #include "../net/netisr.h"
 #include "../net/route.h"
 
+#ifdef	BBNNET
+#define	INET
+#endif
 #ifdef	INET
 #include "../netinet/in.h"
 #include "../netinet/in_systm.h"
-#include "../netinet/in_var.h"
 #include "../netinet/ip.h"
 #endif
 
@@ -115,16 +143,16 @@ struct dmcbufs {
  * efficiently.
  */
 struct dmc_softc {
+	short	sc_oused;		/* output buffers currently in use */
+	short	sc_iused;		/* input buffers given to DMC */
+	short	sc_flag;		/* flags */
+	int	sc_nticks;		/* seconds since last interrupt */
 	struct	ifnet sc_if;		/* network-visible interface */
 	struct	dmcbufs sc_rbufs[NRCV];	/* receive buffer info */
 	struct	dmcbufs sc_xbufs[NXMT];	/* transmit buffer info */
 	struct	ifubinfo sc_ifuba;	/* UNIBUS resources */
 	struct	ifrw sc_ifr[NRCV];	/* UNIBUS receive buffer maps */
 	struct	ifxmt sc_ifw[NXMT];	/* UNIBUS receive buffer maps */
-	short	sc_oused;		/* output buffers currently in use */
-	short	sc_iused;		/* input buffers given to DMC */
-	short	sc_flag;		/* flags */
-	int	sc_nticks;		/* seconds since last interrupt */
 	int	sc_ubinfo;		/* UBA mapping info for base table */
 	int	sc_errors[4];		/* non-fatal error counters */
 #define sc_datck sc_errors[0]
@@ -142,11 +170,10 @@ struct dmc_softc {
 } dmc_softc[NDMC];
 
 /* flags */
-#define DMC_ALLOC	0x01		/* unibus resources allocated */
-#define DMC_BMAPPED	0x02		/* base table mapped */
-#define DMC_RESTART	0x04		/* software restart in progress */
-#define DMC_ACTIVE	0x08		/* device active */
-#define DMC_RUNNING	0x20		/* device initialized */
+#define DMC_ALLOC	01		/* unibus resources allocated */
+#define DMC_BMAPPED	02		/* base table mapped */
+#define DMC_RESTART	04		/* software restart in progress */
+#define DMC_ACTIVE	08		/* device active */
 
 struct dmc_base {
 	short	d_base[128];		/* DMC base table */
@@ -299,7 +326,6 @@ dmcinit(unit)
 		}
 		ifp->if_flags |= IFF_RUNNING;
 	}
-	sc->sc_flag |= DMC_RUNNING;
 
 	/* initialize buffer pool */
 	/* receives */
@@ -334,7 +360,7 @@ dmcinit(unit)
 	/* specify half duplex operation, flags tell if primary */
 	/* or secondary station */
 	if (ui->ui_flags == 0)
-		/* use DDCMP mode in full duplex */
+		/* use DDMCP mode in full duplex */
 		dmcload(sc, DMC_CNTLI, 0, 0);
 	else if (ui->ui_flags == 1)
 		/* use MAINTENENCE mode */
@@ -510,7 +536,7 @@ dmcxint(unit)
 	struct dmcdevice *addr;
 	struct mbuf *m;
 	struct ifqueue *inq;
-	int arg, pkaddr, cmd, len, s;
+	int arg, pkaddr, cmd, len;
 	register struct ifrw *ifrw;
 	register struct dmcbufs *rp;
 	register struct ifxmt *ifxp;
@@ -591,6 +617,8 @@ dmcxint(unit)
 			if (m == 0)
 				goto setup;
 			if (off) {
+				struct ifnet *ifp;
+
 				ifp = *(mtod(m, struct ifnet **));
 				m->m_off += 2 * sizeof (u_short);
 				m->m_len -= 2 * sizeof (u_short);
@@ -609,13 +637,11 @@ dmcxint(unit)
 				goto setup;
 			}
 
-			s = splimp();
 			if (IF_QFULL(inq)) {
 				IF_DROP(inq);
 				m_freem(m);
 			} else
 				IF_ENQUEUE(inq, m);
-			splx(s);
 
 	setup:
 			/* is this needed? */
@@ -660,7 +686,7 @@ dmcxint(unit)
 		case DMC_CNTLO:
 			arg &= DMC_CNTMASK;
 			if (arg & DMC_FATAL) {
-				log(LOG_ERR, "dmc%d: fatal error, flags=%b\n",
+				printd("dmc%d: fatal error, flags=%b\n",
 				    unit, arg, CNTLO_BITS);
 				dmcrestart(unit);
 				break;
@@ -826,7 +852,6 @@ dmcioctl(ifp, cmd, data)
 	caddr_t data;
 {
 	int s = splimp(), error = 0;
-	register struct dmc_softc *sc = &dmc_softc[ifp->if_unit];
 
 	switch (cmd) {
 
@@ -841,17 +866,6 @@ dmcioctl(ifp, cmd, data)
 			dmcinit(ifp->if_unit); 
 		break;
 		
-	case SIOCSIFFLAGS:
-		if ((ifp->if_flags & IFF_UP) == 0 &&
-		    sc->sc_flag & DMC_RUNNING) {
-			((struct dmcdevice *)
-			   (dmcinfo[ifp->if_unit]->ui_addr))->bsel1 = DMC_MCLR;
-			sc->sc_flag &= ~DMC_RUNNING;
-		} else if (ifp->if_flags & IFF_UP &&
-		    (sc->sc_flag & DMC_RUNNING) == 0)
-			dmcrestart(ifp->if_unit);
-		break;
-
 	default:
 		error = EINVAL;
 	}
@@ -871,8 +885,10 @@ dmcrestart(unit)
 	register struct dmcdevice *addr;
 	register struct ifxmt *ifxp;
 	register int i;
+	struct ifubinfo *ifu;
 	
 	addr = (struct dmcdevice *)ui->ui_addr;
+	ifu = &sc->sc_ifuba;
 #ifdef DEBUG
 	/* dump base table */
 	printf("dmc%d base table:\n", unit);
@@ -888,7 +904,7 @@ dmcrestart(unit)
 		;
 	/* Did the timer expire or did the DMR finish? */
 	if ((addr->bsel1 & DMC_RUN) == 0) {
-		log(LOG_ERR, "dmc%d: M820 Test Failed\n", unit);
+		printf("dmc%d: M820 Test Failed\n", unit);
 		return;
 	}
 
@@ -927,8 +943,8 @@ dmcwatch()
 			if (sc->sc_nticks > dmc_timeout) {
 				sc->sc_nticks = 0;
 				addr = (struct dmcdevice *)ui->ui_addr;
-				log(LOG_ERR, "dmc%d hung: bsel0=%b bsel2=%b\n",
-				    i, addr->bsel0 & 0xff, DMC0BITS,
+				printd("dmc%d hung: bsel0=%b bsel2=%b\n", i,
+				    addr->bsel0 & 0xff, DMC0BITS,
 				    addr->bsel2 & 0xff, DMC2BITS);
 				dmcrestart(i);
 			}

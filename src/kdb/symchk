@@ -1,0 +1,4 @@
+#!/bin/csh -fx
+set OBJS=(access.o command.o expr.o format.o input.o main.o message.o opset.o optab.o output.o pcs.o print.o reset.o runpcs.o setup.o sym.o)
+
+nm -pg message.o | sed -n -e 's;^.........C ;;p'

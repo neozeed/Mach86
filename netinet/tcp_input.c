@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)tcp_input.c	7.1 (Berkeley) 6/5/86
+ *	@(#)tcp_input.c	6.13 (Berkeley) 9/16/85
  */
 
 #include "param.h"
@@ -171,7 +198,7 @@ tcp_input(m0)
 	register struct tcpcb *tp = 0;
 	register int tiflags;
 	struct socket *so;
-	int todrop, acked, needoutput = 0;
+	int todrop, acked;
 	short ostate;
 	struct in_addr laddr;
 	int dropsocket = 0;
@@ -245,10 +272,11 @@ tcp_input(m0)
 	tiflags = ti->ti_flags;
 
 	/*
-	 * Drop TCP and IP headers; TCP options were dropped above.
+	 * Drop TCP and IP headers.
 	 */
-	m->m_off += sizeof(struct tcpiphdr);
-	m->m_len -= sizeof(struct tcpiphdr);
+	off += sizeof (struct ip);
+	m->m_off += off;
+	m->m_len -= off;
 
 	/*
 	 * Convert TCP protocol specific fields to host format.
@@ -325,13 +353,9 @@ tcp_input(m0)
 	 * Receive window is amount of space in rcv queue,
 	 * but not less than advertised window.
 	 */
-	{ int win;
-
-	win = sbspace(&so->so_rcv);
-	if (win < 0)
-		win = 0;
-	tp->rcv_wnd = MAX(win, (int)(tp->rcv_adv - tp->rcv_nxt));
-	}
+	tp->rcv_wnd = MAX(sbspace(&so->so_rcv), tp->rcv_adv - tp->rcv_nxt);
+	if (tp->rcv_wnd < 0)
+		tp->rcv_wnd = 0;
 
 	switch (tp->t_state) {
 
@@ -339,7 +363,6 @@ tcp_input(m0)
 	 * If the state is LISTEN then ignore segment if it contains an RST.
 	 * If the segment contains an ACK then it is bad and send a RST.
 	 * If it does not contain a SYN then it is not interesting; drop it.
-	 * Don't bother responding if the destination was a broadcast.
 	 * Otherwise initialize tp->rcv_nxt, and tp->irs, select an initial
 	 * tp->iss, and send a segment:
 	 *     <SEQ=ISS><ACK=RCV_NXT><CTL=SYN,ACK>
@@ -357,8 +380,6 @@ tcp_input(m0)
 		if (tiflags & TH_ACK)
 			goto dropwithreset;
 		if ((tiflags & TH_SYN) == 0)
-			goto drop;
-		if (in_broadcast(ti->ti_dst))
 			goto drop;
 		am = m_get(M_DONTWAIT, MT_SONAME);
 		if (am == NULL)
@@ -379,8 +400,9 @@ tcp_input(m0)
 		(void) m_free(am);
 		tp->t_template = tcp_template(tp);
 		if (tp->t_template == 0) {
-			tp = tcp_drop(tp, ENOBUFS);
+			in_pcbdisconnect(inp);
 			dropsocket = 0;		/* socket is already gone */
+			tp = 0;
 			goto drop;
 		}
 		if (om) {
@@ -391,7 +413,6 @@ tcp_input(m0)
 		tp->irs = ti->ti_seq;
 		tcp_sendseqinit(tp);
 		tcp_rcvseqinit(tp);
-		tp->t_flags |= TF_ACKNOW;
 		tp->t_state = TCPS_SYN_RECEIVED;
 		tp->t_timer[TCPT_KEEP] = TCPTV_KEEP;
 		dropsocket = 0;		/* committed to socket */
@@ -449,10 +470,9 @@ trimthenstep6:
 			todrop = ti->ti_len - tp->rcv_wnd;
 			m_adj(m, -todrop);
 			ti->ti_len = tp->rcv_wnd;
-			tiflags &= ~TH_FIN;
+			ti->ti_flags &= ~TH_FIN;
 		}
 		tp->snd_wl1 = ti->ti_seq - 1;
-		tp->rcv_up = ti->ti_seq;
 		goto step6;
 	}
 
@@ -482,7 +502,7 @@ trimthenstep6:
 		if (ti->ti_len > 0) {
 			m_adj(m, ti->ti_len);
 			ti->ti_len = 0;
-			tiflags &= ~(TH_PUSH|TH_FIN);
+			ti->ti_flags &= ~(TH_PUSH|TH_FIN);
 		}
 	} else {
 		/*
@@ -493,6 +513,7 @@ trimthenstep6:
 		if (todrop > 0) {
 			if (tiflags & TH_SYN) {
 				tiflags &= ~TH_SYN;
+				ti->ti_flags &= ~TH_SYN;
 				ti->ti_seq++;
 				if (ti->ti_urp > 1) 
 					ti->ti_urp--;
@@ -510,6 +531,7 @@ trimthenstep6:
 				ti->ti_urp -= todrop;
 			else {
 				tiflags &= ~TH_URG;
+				ti->ti_flags &= ~TH_URG;
 				ti->ti_urp = 0;
 			}
 		}
@@ -523,7 +545,7 @@ trimthenstep6:
 				goto dropafterack;
 			m_adj(m, -todrop);
 			ti->ti_len -= todrop;
-			tiflags &= ~(TH_PUSH|TH_FIN);
+			ti->ti_flags &= ~(TH_PUSH|TH_FIN);
 		}
 	}
 
@@ -634,16 +656,9 @@ trimthenstep6:
 			tp->t_rtt = 0;
 		}
 
-		/*
-		 * If all outstanding data is acked, stop retransmit
-		 * timer and remember to restart (more output or persist).
-		 * If there is more data to be acked, restart retransmit
-		 * timer.
-		 */
-		if (ti->ti_ack == tp->snd_max) {
+		if (ti->ti_ack == tp->snd_max)
 			tp->t_timer[TCPT_REXMT] = 0;
-			needoutput = 1;
-		} else if (tp->t_timer[TCPT_PERSIST] == 0) {
+		else {
 			TCPT_RANGESET(tp->t_timer[TCPT_REXMT],
 			    tcp_beta * tp->t_srtt, TCPTV_MIN, TCPTV_MAX);
 			tp->t_rxtshift = 0;
@@ -655,7 +670,7 @@ trimthenstep6:
 			tp->snd_cwnd = MIN(11 * tp->snd_cwnd / 10, 65535);
 		if (acked > so->so_snd.sb_cc) {
 			tp->snd_wnd -= so->so_snd.sb_cc;
-			sbdrop(&so->so_snd, (int)so->so_snd.sb_cc);
+			sbdrop(&so->so_snd, so->so_snd.sb_cc);
 		} else {
 			sbdrop(&so->so_snd, acked);
 			tp->snd_wnd -= acked;
@@ -732,18 +747,13 @@ trimthenstep6:
 step6:
 	/*
 	 * Update window information.
-	 * Don't look at window if no ACK: TAC's send garbage on first SYN.
 	 */
-	if ((tiflags & TH_ACK) &&
-	    (SEQ_LT(tp->snd_wl1, ti->ti_seq) || tp->snd_wl1 == ti->ti_seq &&
+	if (SEQ_LT(tp->snd_wl1, ti->ti_seq) || tp->snd_wl1 == ti->ti_seq &&
 	    (SEQ_LT(tp->snd_wl2, ti->ti_ack) ||
-	     tp->snd_wl2 == ti->ti_ack && ti->ti_win > tp->snd_wnd))) {
+	     tp->snd_wl2 == ti->ti_ack && ti->ti_win > tp->snd_wnd)) {
 		tp->snd_wnd = ti->ti_win;
 		tp->snd_wl1 = ti->ti_seq;
 		tp->snd_wl2 = ti->ti_ack;
-		if (tp->snd_wnd > tp->max_sndwnd)
-			tp->max_sndwnd = tp->snd_wnd;
-		needoutput = 1;
 	}
 
 	/*
@@ -752,15 +762,16 @@ step6:
 	if ((tiflags & TH_URG) && ti->ti_urp &&
 	    TCPS_HAVERCVDFIN(tp->t_state) == 0) {
 		/*
-		 * This is a kludge, but if we receive and accept
+		 * This is a kludge, but if we receive accept
 		 * random urgent pointers, we'll crash in
 		 * soreceive.  It's hard to imagine someone
 		 * actually wanting to send this much urgent data.
 		 */
-		if (ti->ti_urp + so->so_rcv.sb_cc > SB_MAX) {
+		if (ti->ti_urp + (unsigned) so->so_rcv.sb_cc > 32767) {
 			ti->ti_urp = 0;			/* XXX */
 			tiflags &= ~TH_URG;		/* XXX */
-			goto dodata;			/* XXX */
+			ti->ti_flags &= ~TH_URG;	/* XXX */
+			goto badurp;			/* XXX */
 		}
 		/*
 		 * If this segment advances the known urgent pointer,
@@ -768,13 +779,6 @@ step6:
 		 * in CLOSE_WAIT, CLOSING, LAST_ACK or TIME_WAIT STATES since
 		 * a FIN has been received from the remote side. 
 		 * In these states we ignore the URG.
-		 *
-		 * According to RFC961 (Assigned Protocols),
-		 * the urgent pointer points to the last octet
-		 * of urgent data.  We continue, however,
-		 * to consider it to indicate the first octet
-		 * of data past the urgent section
-		 * as the original spec states.
 		 */
 		if (SEQ_GT(ti->ti_seq+ti->ti_urp, tp->rcv_up)) {
 			tp->rcv_up = ti->ti_seq + ti->ti_urp;
@@ -791,18 +795,10 @@ step6:
 		 * but if two URG's are pending at once, some out-of-band
 		 * data may creep in... ick.
 		 */
-		if (ti->ti_urp <= ti->ti_len &&
-		    (so->so_options & SO_OOBINLINE) == 0)
+		if (ti->ti_urp <= ti->ti_len)
 			tcp_pulloutofband(so, ti);
-	} else
-		/*
-		 * If no out of band data is expected,
-		 * pull receive urgent pointer along
-		 * with the receive window.
-		 */
-		if (SEQ_GT(tp->rcv_nxt, tp->rcv_up))
-			tp->rcv_up = tp->rcv_nxt;
-dodata:							/* XXX */
+	}
+badurp:							/* XXX */
 
 	/*
 	 * Process the segment text, merging it into the TCP sequencing queue,
@@ -819,14 +815,6 @@ dodata:							/* XXX */
 			tp->t_flags |= TF_DELACK;
 		else
 			tp->t_flags |= TF_ACKNOW;
-		/*
-		 * Note the amount of data that peer has sent into
-		 * our window, in order to estimate the sender's
-		 * buffer size.
-		 */
-		len = so->so_rcv.sb_hiwat - (tp->rcv_nxt - tp->rcv_adv);
-		if (len > tp->max_rcvd)
-			tp->max_rcvd = len;
 	} else {
 		m_freem(m);
 		tiflags &= ~TH_FIN;
@@ -887,8 +875,7 @@ dodata:							/* XXX */
 	/*
 	 * Return any desired output.
 	 */
-	if (needoutput || (tp->t_flags & TF_ACKNOW))
-		(void) tcp_output(tp);
+	(void) tcp_output(tp);
 	return;
 
 dropafterack:
@@ -896,7 +883,8 @@ dropafterack:
 	 * Generate an ACK dropping incoming segment if it occupies
 	 * sequence space, where the ACK reflects our state.
 	 */
-	if (tiflags & TH_RST)
+	if ((tiflags&TH_RST) ||
+	    tlen == 0 && (tiflags&(TH_SYN|TH_FIN)) == 0)
 		goto drop;
 	if (tp->t_inpcb->inp_socket->so_options & SO_DEBUG)
 		tcp_trace(TA_RESPOND, ostate, tp, &tcp_saveti, 0);
@@ -911,9 +899,8 @@ dropwithreset:
 	/*
 	 * Generate a RST, dropping incoming segment.
 	 * Make ACK acceptable to originator of segment.
-	 * Don't bother to respond if destination was broadcast.
 	 */
-	if ((tiflags & TH_RST) || in_broadcast(ti->ti_dst))
+	if (tiflags & TH_RST)
 		goto drop;
 	if (tiflags & TH_ACK)
 		tcp_respond(tp, ti, (tcp_seq)0, ti->ti_ack, TH_RST);

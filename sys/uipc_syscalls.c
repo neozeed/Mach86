@@ -1,10 +1,56 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)uipc_syscalls.c	7.1 (Berkeley) 6/5/86
+ *	@(#)uipc_syscalls.c	6.10 (Berkeley) 9/16/85
  */
+#if	CMU
+
+/*
+ **********************************************************************
+ * HISTORY
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 27-Sep-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT:  Changed to flag socket as pipe when created (for
+ *	future use in ofstat()).
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_compat.h"
+ 
+#endif	CMU
 
 #include "param.h"
 #include "systm.h"
@@ -188,24 +234,18 @@ connect()
 	if (fp == 0)
 		return;
 	so = (struct socket *)fp->f_data;
-	if ((so->so_state & SS_NBIO) &&
-	    (so->so_state & SS_ISCONNECTING)) {
-		u.u_error = EALREADY;
-		return;
-	}
 	u.u_error = sockargs(&nam, uap->name, uap->namelen, MT_SONAME);
 	if (u.u_error)
 		return;
 	u.u_error = soconnect(so, nam);
 	if (u.u_error)
 		goto bad;
+	s = splnet();
 	if ((so->so_state & SS_NBIO) &&
 	    (so->so_state & SS_ISCONNECTING)) {
 		u.u_error = EINPROGRESS;
-		m_freem(nam);
-		return;
+		goto bad2;
 	}
-	s = splnet();
 	if (setjmp(&u.u_qsave)) {
 		if (u.u_error == 0)
 			u.u_error = EINTR;
@@ -218,7 +258,6 @@ connect()
 bad2:
 	splx(s);
 bad:
-	so->so_state &= ~SS_ISCONNECTING;
 	m_freem(nam);
 }
 
@@ -259,6 +298,10 @@ socketpair()
 	fp2->f_type = DTYPE_SOCKET;
 	fp2->f_ops = &socketops;
 	fp2->f_data = (caddr_t)so2;
+#if	CS_COMPAT
+	fp1->f_flag |= FPIPE;
+	fp2->f_flag |= FPIPE;
+#endif	CS_COMPAT
 	sv[1] = u.u_r.r_val1;
 	u.u_error = soconnect2(so1, so2);
 	if (u.u_error)
@@ -281,9 +324,11 @@ free3:
 	fp1->f_count = 0;
 	u.u_ofile[sv[0]] = 0;
 free2:
-	(void)soclose(so2);
+	so2->so_state |= SS_NOFDREF;
+	sofree(so2);
 free:
-	(void)soclose(so1);
+	so1->so_state |= SS_NOFDREF;
+	sofree(so1);
 }
 
 sendto()
@@ -355,6 +400,11 @@ sendmsg()
 	if (u.u_error)
 		return;
 	msg.msg_iov = aiov;
+#ifdef notdef
+printf("sendmsg name %x namelen %d iov %x iovlen %d accrights %x &len %d\n",
+msg.msg_name, msg.msg_namelen, msg.msg_iov, msg.msg_iovlen,
+msg.msg_accrights, msg.msg_accrightslen);
+#endif
 	sendit(uap->s, &msg, uap->flags);
 }
 
@@ -379,7 +429,7 @@ sendit(s, mp, flags)
 	auio.uio_offset = 0;			/* XXX */
 	auio.uio_resid = 0;
 	iov = mp->msg_iov;
-	for (i = 0; i < mp->msg_iovlen; i++, iov++) {
+	for (i = 0; i < mp->msg_iovlen; i++) {
 		if (iov->iov_len < 0) {
 			u.u_error = EINVAL;
 			return;
@@ -391,6 +441,7 @@ sendit(s, mp, flags)
 			return;
 		}
 		auio.uio_resid += iov->iov_len;
+		iov++;
 	}
 	if (mp->msg_name) {
 		u.u_error =
@@ -525,7 +576,7 @@ recvit(s, mp, flags, namelenp, rightslenp)
 	auio.uio_offset = 0;			/* XXX */
 	auio.uio_resid = 0;
 	iov = mp->msg_iov;
-	for (i = 0; i < mp->msg_iovlen; i++, iov++) {
+	for (i = 0; i < mp->msg_iovlen; i++) {
 		if (iov->iov_len < 0) {
 			u.u_error = EINVAL;
 			return;
@@ -537,6 +588,7 @@ recvit(s, mp, flags, namelenp, rightslenp)
 			return;
 		}
 		auio.uio_resid += iov->iov_len;
+		iov++;
 	}
 	len = auio.uio_resid;
 	u.u_error =
@@ -692,9 +744,13 @@ pipe()
 	wf->f_type = DTYPE_SOCKET;
 	wf->f_ops = &socketops;
 	wf->f_data = (caddr_t)wso;
+#if	CS_COMPAT
+	rf->f_flag |= FPIPE;
+	wf->f_flag |= FPIPE;
+#endif	CS_COMPAT
 	u.u_r.r_val2 = u.u_r.r_val1;
 	u.u_r.r_val1 = r;
-	if (u.u_error = unp_connect2(wso, rso))
+	if (u.u_error = unp_connect2(wso, (struct mbuf *)0, rso))
 		goto free4;
 	wso->so_state |= SS_CANTRCVMORE;
 	rso->so_state |= SS_CANTSENDMORE;
@@ -706,9 +762,11 @@ free3:
 	rf->f_count = 0;
 	u.u_ofile[r] = 0;
 free2:
-	(void)soclose(wso);
+	wso->so_state |= SS_NOFDREF;
+	sofree(wso);
 free:
-	(void)soclose(rso);
+	rso->so_state |= SS_NOFDREF;
+	sofree(rso);
 }
 
 /*

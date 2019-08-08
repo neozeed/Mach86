@@ -1,0 +1,135 @@
+#
+# Standard Mach kernel.
+#
+machine		vax
+cpu		"VAX780"
+cpu		"VAXM"
+ident		CMU
+timezone	5 dst
+maxusers	16
+options		QUOTA
+options		GENERIC
+options		INET
+options		COMPAT
+options		BUG_FIX
+options		CMU_BUGFIX
+options		CS_AID		# Account ID support
+options 	CS_BOOT		# Bootstrap enhancements
+options 	CS_BUGFIX	# CS/RI bug fixes
+options 	CS_COMPAT	# 4.1 system call compatibility
+options 	CS_CONS		# Console device enhancements
+options 	CS_DISK		# Disk driver enhancements (TEMP)
+options 	CS_GFB		# Gruss Frame Buffer support 
+options 	CS_GENERIC	# CS/RI general enhancements
+options 	CS_ICHK		# Inode reference count checking
+options 	CS_INET		# Internet Protocol enhancements
+options 	CS_IPC		# Old CMU IPC support
+options 	CS_KDB		# Kernel debugger support
+options 	CS_LINT		# CS/RI fixes for lint(1)
+options 	CS_NOFILE	# Expanded file descriptors
+options 	CS_OLDDIR	# 4.1 directory format support
+options 	CS_OLDFS	# 4.1 file system format support
+options 	CS_QUOTE	# Symbolic link quoting
+options 	CS_QVSS		# uVax QVSS driver enhancements
+options 	CS_RFS		# Remote file system support
+options 	CS_RPAUSE	# Resource pause support
+options 	CS_SECURITY	# CS/RI security fixes
+options 	CS_SOCKET	# Socket enhancements
+options 	CS_SYSCALL	# System call enhancementrs
+options 	CS_TCP		# TCP enhancements
+options 	CS_TTY		# Terminal driver enhancements
+options 	CS_TTYLOC	# Terminal location support
+options 	CS_XLDS		# Extra large data segment 
+options 	CS_XMOD		# Exclusive use files enhancements (temp)
+options 	CS_XONLY	# Execute only enhancements
+options 	CS_VAXM		# uVax support
+options		NET_BUGFIX	# Network published bug fixes
+options 	MACH_ACC		# Accent style IPC support
+options		MACH_HP		# 4.2/ultrix eagle partition tables
+options 	MACH_LOAD		# Variable load point support
+options 	MACH_MP		# Multi-processor support
+options 	MACH_ONLY		# WB specific features
+options 	MACH_SHM		# Shared memory support
+options 	MACH_SYSCALL	# New system call interface
+options 	MACH_TIME		# Precision timing
+
+config		vmunix		swap generic
+config		hpvmunix	root on hp dumps on hp swap on hp and hp1
+config		hkvmunix	root on hk dumps on hk swap on hk and hk1
+config		ravmunix	root on ra dumps on ra swap on ra and ra1
+
+#
+#	FEATURES
+#
+pseudo-device	emul			# instruction emulation.
+pseudo-device	cpus	4		# max number of cpu's.
+pseudo-device	mach_mpm	4
+#pseudo-device	wb_sens			# sensors
+#
+#	RETIRED FEATURES
+#
+#pseudo-device	wb_ml
+#
+#	MASTERS
+#
+controller	mba0	at nexus ?
+controller	mba1	at nexus ?
+controller	mba2	at nexus ?
+controller	mba3	at nexus ?
+controller	uba0	at nexus ?
+controller	uba1	at nexus ?
+controller	uba2	at nexus ?
+controller	uba3	at nexus ?
+disk		hp0	at mba? drive 0
+disk		hp1	at mba? drive ?
+disk		hp2	at mba? drive ?
+disk		hp3	at mba? drive ?
+master		ht0	at mba? drive ?
+tape		tu0	at ht0 slave 0
+tape		tu1	at ht0 slave 1
+controller	hk0	at uba? csr 0177440 		vector rkintr
+disk		rk0	at hk0 drive 0
+disk		rk1	at hk0 drive 1
+controller	ut0	at uba? csr 0172440 		vector utintr
+tape		tj0	at ut0 drive 0
+controller	uda0	at uba? csr 0172150		vector udintr
+disk		ra0	at uda0 drive 0
+disk		ra1	at uda0 drive 1
+disk		ra2	at uda0 drive 2
+disk		ra3	at uda0 drive 3
+controller	uda1	at uba? csr 0160334 		vector udintr
+disk		ra4	at uda1 drive 4
+disk		ra5	at uda1 drive 5
+disk		ra6	at uda1 drive 6
+disk		ra7	at uda1 drive 7
+#
+#			Now Devices
+#
+#
+#  DEQNA 10Mb ethernet
+#
+device		qe0	at uba0 csr 0174440 vector qeintr
+#
+#  DEUNA 10Mb ethernet
+#
+device		de0	at uba? csr 0174510 vector deintr
+device		dz0	at uba? csr 0160100 flags 0xff	vector dzrint dzxint
+device		dz1	at uba? csr 0160110 flags 0xff	vector dzrint dzxint
+#
+#  QVSS Graphics Display
+#
+device		qv0	at uba0 csr 0177200 flags 0x0f 	vector qvkint qvvint
+#
+#
+#
+controller	zs0	at uba? csr 0172520		vector tsintr
+device		ts0	at zs0 drive 0
+#
+#	PSEUDO DEVICES
+#
+pseudo-device	pty	32
+pseudo-device	cmupty
+pseudo-device	loop
+pseudo-device	inet
+pseudo-device	ether
+pseudo-device	enetfilter

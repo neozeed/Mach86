@@ -1,0 +1,196 @@
+#$Header: Makefile.ca,v 4.1 85/09/24 09:26:43 chessin Exp $
+#$Source: /ibm/acis/usr/sys_ca/conf/RCS/Makefile.ca,v $
+#
+# Copyright (c) 1980 Regents of the University of California.
+# All rights reserved.  The Berkeley software License Agreement
+# specifies the terms and conditions for redistribution.
+#
+#	@(#)Makefile.vax	6.16 (Berkeley) 9/18/85
+#
+# Makefile for 4.3 BSD
+######################################################################
+# HISTORY
+# 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+#	Upgraded to 4.3.
+#
+# 01-Jan-86  Mike Accetta (mja) at Carnegie-Mellon University
+#	Adjusted "depend" ed command script to avoid (for now) editor
+#	limitation when temporary file grows too large.
+#
+# 13-Nov-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+#	Fixed up "make depend" a bit.  The grep of the header files was
+#	getting to long, so it is now limited to searching through
+#	files matching ../[a-z]/*.h, which doesn't include the "build"
+#	directories (which contain huge numbers of header files).
+#
+# 15-Sep-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+#	Separated CFILE and SFILE greps for make depend.  Apparently the
+#	number of files is so large that having both on a single grep
+#	command won't work.
+#
+#  8-Sep-85  Avadis Tevanian (avie) at Carnegie-Mellon University
+#	Several changes... use -I for genassym.  Add LIBS definition.
+#	Add commands for inline.  Remove builtin .h dependencies and
+#	determine them dynamically with make depend.  Awk processing
+#	of vaxfloat.s
+#
+# 31-Mar-84  Avadis Tevanian (avie) at Carnegie-Mellon University
+#	When making locore.o, use ${AS} instead of "as".
+#
+######################################################################
+# This makefile is constructed from a machine description:
+#	config machineid
+# Most changes should be made in the machine description
+#	/sys/conf/``machineid''
+# after which you should do
+#	 config machineid
+# Generic makefile changes should be made in
+#	/sys/conf/Makefile.``machinetype''
+# after which config should be rerun for all machines.
+#
+# N.B.: NO DEPENDENCIES ON FOLLOWING FLAGS ARE VISIBLE TO MAKEFILE
+#	IF YOU CHANGE THE DEFINITION OF ANY OF THESE RECOMPILE EVERYTHING
+#
+# -DTRACE	compile in kernel tracing hooks
+# -DQUOTA	compile in file system quotas
+# -DUUDMA	compile in unibus tu58 pseudo-dma code
+# -DSWABIPS	compile in code to byte swap ip packets on 3Mb/s Ethernet
+#
+.SUFFIXES: .ws .rmp .hrd .out .o .b .s .c .c,v .s,v .h,v
+HOST=ws	#overridden when in cross-compile mode
+C2=	OOPS
+CPP=	/lib/cpp
+CC=	/bin/cc
+AS=	/bin/as
+LD=	ld
+LIBS=-lc
+LDFLAGS=-N -e _start -x
+AWK=	awk
+TOUCH_NATIVE=	touch -c -f
+TOUCH_CROSS= cd ../h; co
+TOUCH= sh -c 'if [ ${HOST} = ws ] ;then ${TOUCH_NATIVE} $$*; else ${TOUCH_CROSS} $$*; fi' TOUCH
+#Yes, this has been tested -- you must use makeca on the Vax -- and the
+#last TOUCH is necessary
+
+INCLUDES= -I. -I../h -N
+COPTS=	${INCLUDES} ${IDENT} -DKERNEL #-Dromp -Usun -Umc68000
+CFLAGS= -O ${COPTS}
+ASFLAGS=
+SFLAGS=	${INCLUDES} ${IDENT} -DKERNEL -DASSEMBLER
+
+VMRDB=../standca/rdb.ws
+
+%OBJS
+
+%CFILES
+
+.out.rmp:
+	fog $*.out $*.rmp 0 8000
+%SFILES
+
+%LOAD
+
+clean:
+	rm -f eddep *vmunix tags *.o locore.i [a-tv-z]*.s \
+		errs linterrs makelinks
+
+#lint: FRC
+lint: /tmp
+	@echo 'As on the Vax (supressing "struct/union never defined" \
+and "possible pointer alignment problem")'
+	@lint -hbxn -DGENERIC ${COPTS} ${PARAM} ../ca/Locore.c \
+	  ${CFILES} ../ca/swapgeneric.c ioconf.c | \
+	    grep -v 'struct/union .* never defined' | \
+	    grep -v 'possible pointer alignment problem'
+
+../ca/symbols.sort: ../ca/symbols.raw
+	grep -v '^#' ../ca/symbols.raw \
+	    | sed 's/^	//' | sort -u > ../ca/symbols.sort
+
+
+blt.o: ../ca/blt.s
+	$(CPP) $(IDENT) ../machine/blt.s > blt.s
+	$(AS) $(ASFLAGS) -o blt.o blt.s
+	@mv blt.s #blt.s
+
+vmunix: blt.o	# this is necessary to make sure blt.o really gets compiled.
+
+$(VMRDB): ../standca/rdb.c
+	(cd ../standca; make rdb.out; make rdb.ws)
+
+locore.o: ../ca/locore.c ../ca/locore.h ../ca/lointpsw.s \
+    ../ca/rosetta.h ../ca/scr.h \
+    proc.m ../ca/pcb.m ../ca/pte.h ../h/param.h \
+    ../ca/loslih.h ../ca/lointr.s \
+    ../ca/loutil.s ../ca/lohatipt.s ../ca/lopckrt0.s \
+    ../ca/lokprof.s
+	$(CC) -E -I. -DLOCORE -DASSEMBLER $(SFLAGS) $(PARAM) ../ca/locore.c \
+	    > locore.s
+	$(AS) $(ASFLAGS) -o locore.o locore.s
+	@mv -f locore.s #locore.s
+
+genassym.o: ../ca/genassym.c
+	${CC} -c ${COPTS} ${PARAM} ../ca/genassym.c
+
+proc.m: genassym.o
+	${CC} genassym.o
+	./a.out > proc.m; rm -f a.out
+
+depend: 
+	echo You dont need to run make depend anymore.
+
+../h/param.h: /usr/include/signal.h
+	${TOUCH} ../h/param.h
+../h/tty.h:  ../h/ttychars.h ../h/ttydev.h
+	${TOUCH} ../h/tty.h
+../h/ioctl.h: /usr/include/sgtty.h ../h/ttychars.h ../h/ttydev.h
+	${TOUCH} ../h/ioctl.h
+../h/user.h: ../ca/pcb.h ../h/dmap.h ../h/types.h \
+    /usr/include/errno.h
+	${TOUCH} ../h/user.h
+../h/vm.h: ../h/vmmac.h ../h/vmmeter.h ../h/vmparam.h ../h/vmsystm.h
+	${TOUCH} ../h/vm.h
+
+links:
+	egrep '#if' ${CFILES} | sed -f ../conf/defines | \
+	  sed -e 's/:.*//' -e 's/\.c/.o/' | sort -u > dontlink
+	echo ${CFILES} | tr -s ' ' '\12' | sed 's/\.c/.o/' | \
+	  sort -u | comm -23 - dontlink | \
+	  sed 's,../.*/\(.*.o\),rm -f \1;ln -s ../GENERIC/\1 \1,' > makelinks
+	echo 'rm -f udiv.o;ln -s ../GENERIC/udiv.o udiv.o' >> makelinks
+	echo 'rm -f urem.o;ln -s ../GENERIC/urem.o urem.o' >> makelinks
+	sh makelinks && rm -f dontlink
+
+tags:	${CFILES}
+	/usr/ucb/ctags ${CFILES}
+
+print:
+	@pr -f Makefile ../sys/TODO linterrs
+	@/usr/ucb/ctags -x ${CFILES} | pr -f -h XREF
+	@(size vmunix *.o) | pr -f -h sizes
+	@ls -ls | pr -f
+	@cd ../h; ls -ls | pr -f ; pr -f *.m *.h
+	@echo 'once upon a time ...'
+	@cd ../sys; pr -f asm.sed Locore.c scb.s locore.s
+	@pr -f ${CFILES}
+
+ioconf.o: ioconf.c ../h/param.h ../ca/pte.h ../h/buf.h ../h/map.h \
+    ../h/vm.h ../caio/ioccvar.h
+	${CC} -I. -c -O ${COPTS} ioconf.c
+
+param.c: ../conf/param.c
+	rm -f param.c
+	cp ../conf/param.c .
+
+param.o: param.c 
+	${CC} -I. -c ${CFLAGS} ${PARAM} param.c
+
+apa8_scroll.o: ../ca/apa8_scroll.c
+	$(CC) -N -E -I. $(COPTS) ../ca/apa8_scroll.c > apa8_scroll.s
+	$(AS) $(ASFLAGS) -o apa8_scroll.o apa8_scroll.s
+	@rm -f apa8_scroll.s
+
+%RULES
+
+# DO NOT DELETE THIS LINE -- make depend uses it
+

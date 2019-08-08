@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1980, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1980 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)route.c	7.1 (Berkeley) 6/4/86
+ *	@(#)route.c	6.12 (Berkeley) 9/16/85
  */
 
 #include "param.h"
@@ -129,14 +156,11 @@ rtredirect(dst, gateway, flags, src)
 	(bcmp((caddr_t)(a1), (caddr_t)(a2), sizeof(struct sockaddr)) == 0)
 	/*
 	 * If the redirect isn't from our current router for this dst,
-	 * it's either old or wrong.  If it redirects us to ourselves,
-	 * we have a routing loop, perhaps as a result of an interface
-	 * going down recently.
+	 * it's either old or wrong.
 	 */
-	if ((rt && !equal(src, &rt->rt_gateway)) || ifa_ifwithaddr(gateway)) {
+	if (rt && !equal(src, &rt->rt_gateway)) {
 		rtstat.rts_badredirect++;
-		if (rt)
-			rtfree(rt);
+		rtfree(rt);
 		return;
 	}
 	/*
@@ -151,7 +175,7 @@ rtredirect(dst, gateway, flags, src)
 		rt = 0;
 	}
 	if (rt == 0) {
-		rtinit(dst, gateway, (int)SIOCADDRT,
+		rtinit(dst, gateway,
 		    (flags & RTF_HOST) | RTF_GATEWAY | RTF_DYNAMIC);
 		rtstat.rts_dynamic++;
 		return;
@@ -166,13 +190,14 @@ rtredirect(dst, gateway, flags, src)
 			 * Changing from route to net => route to host.
 			 * Create new route, rather than smashing route to net.
 			 */
-			rtinit(dst, gateway, (int)SIOCADDRT,
-			    flags | RTF_DYNAMIC);
-			rtstat.rts_dynamic++;
+			rtinit(dst, gateway, flags);
 		} else {
 			/*
 			 * Smash the current notion of the gateway to
-			 * this destination.
+			 * this destination.  This is probably not right,
+			 * as it's conceivable a flurry of redirects could
+			 * cause the gateway value to fluctuate wildly during
+			 * dynamic routing reconfiguration.
 			 */
 			rt->rt_gateway = *gateway;
 		}
@@ -273,10 +298,9 @@ rtrequest(req, entry)
 			 * as our clue to the interface.  Otherwise
 			 * we can use the local address.
 			 */
-			ifa = 0;
 			if (entry->rt_flags & RTF_HOST) 
 				ifa = ifa_ifwithdstaddr(&entry->rt_dst);
-			if (ifa == 0)
+			else
 				ifa = ifa_ifwithaddr(&entry->rt_gateway);
 		} else {
 			/*
@@ -322,12 +346,19 @@ bad:
  * Set up a routing table entry, normally
  * for an interface.
  */
-rtinit(dst, gateway, cmd, flags)
+rtinit(dst, gateway, flags)
 	struct sockaddr *dst, *gateway;
-	int cmd, flags;
+	int flags;
 {
 	struct rtentry route;
+	int cmd;
 
+	if (flags == -1) {
+		cmd = (int)SIOCDELRT;
+		flags = 0;
+	} else {
+		cmd = (int)SIOCADDRT;
+	}
 	bzero((caddr_t)&route, sizeof (route));
 	route.rt_dst = *dst;
 	route.rt_gateway = *gateway;

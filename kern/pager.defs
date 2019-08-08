@@ -1,0 +1,72 @@
+subsystem Pager 1200;
+{
+/*
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Abstract:
+ *   Matchmaker definitions file for the Mach external pager interface.
+ *
+ * HISTORY
+ * 28-May-86  Jeffrey Eppinger (jle) at Carnegie-Mellon University
+ *	Created.
+ */
+}
+
+type int = (TypeInt32, 32);
+
+type boolean_t = int;
+
+type port_t = (TypePt, 32);
+type vm_offset_t = int;
+type vm_size_t = int;
+type vm_pager_id_t = int;
+
+type pointer_t = ^array [] of (TypeInt8, 8);
+
+simports mach_if from mach_if;
+simports accent from accent;
+uimports mach_types from mach_types;
+
+simpleprocedure pager_init(
+		pager_port	: port_t;
+		pager_space	: vm_pager_id_t;
+		request_port	: port_t;
+		name_port	: port_t);
+
+function pager_read(
+		pager_port	: port_t;
+		pager_space	: vm_pager_id_t;
+		pager_offset	: vm_offset_t;
+		size		: vm_size_t;
+	    out data		: pointer_t = ^array [] of (TypeInt8, 8, dealloc)) : boolean_t;
+
+function pager_write(
+		pager_port	: port_t;
+		pager_space	: vm_pager_id_t;
+		pager_offset	: vm_offset_t;
+		data		: pointer_t) : boolean_t;

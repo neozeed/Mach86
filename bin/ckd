@@ -1,0 +1,72 @@
+#!/bin/csh -f
+
+cd
+set ORIG=(/4.2bsd/sys /4.2bsd/sysU /ultrix/sys)
+set LASTCKD=.lastckd
+set EXRC=ckd.exrc
+set DIRS=() files=()
+set CKDERR="ckd.err"
+set CKDOUT="ckd.out"
+set TMP="vi$$.tmp"
+
+if ($#argv == 0) then
+    set DIRS=(conf emul h net netimp netinet netpup sys vax vaxif vaxmba vaxuba)
+endif
+
+foreach file ($argv)
+    if (-d $file) then
+	set DIRS=($DIRS $file)
+    else
+	set files=($files $file)
+    endif
+end
+
+if ($#DIRS > 0) then
+    set files=($files `find $DIRS -name "*.[csh]" -newer $LASTCKD -print`)
+endif
+
+foreach file ($files)
+    unset orig
+    foreach odir ($ORIG)
+	set ofile=$file
+	if ($odir:r =~ *U && $file:r =~ *U) then
+	   set ofile=`expr "$file:r" : '^\(.*\)U$'`.$file:e
+	endif
+	if (-f $odir/$ofile) then
+	    set orig=$odir/$ofile
+	    break
+	endif
+    end
+    if (! $?orig) then
+	echo "[ ${file}: no original for comparison ]"
+	continue
+    endif
+    echo "[ ${file}: against $orig ]"
+    while (1)
+	rm -f ${CKDERR} ${CKDOUT}
+	(echo "-output=${CKDOUT} -error=${CKDERR}"; diff $orig $file) | awk -f lib/ckd.awk
+	if (! -f ${CKDERR}) break;
+	tail ${CKDOUT}
+	set extra="" errors=(`cat $CKDERR`)
+	stty echo
+	sleep 3
+	if ($errors[1] <= 2) set extra=$orig
+	onintr -
+	echo $errors[2] >$TMP
+	if (-f $EXRC) echo "source $EXRC" >>$TMP
+	$EDITOR +"source $TMP" $file $extra
+	rm -f $TMP
+	onintr
+    end
+    rm -f ${CKDOUT}
+end
+
+if ($#DIRS > 0) then
+    echo -n "Update $LASTCKD?  [ yes ]  "
+    set ans="$<"
+    if ("$ans" == "" || "$ans" =~ [Yy] || "$ans" =~ [Yy][Ee][Ss]) then
+	mv $LASTCKD $LASTCKD.old
+	touch $LASTCKD
+	ls -l ${LASTCKD}*
+    endif
+endif

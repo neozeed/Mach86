@@ -1,10 +1,52 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)uipc_socket2.c	7.1 (Berkeley) 6/5/86
+ *	@(#)uipc_socket2.c	6.10 (Berkeley) 6/8/85
  */
+#if	CMU
+ 
+/*
+ **********************************************************************
+ * HISTORY
+ * 20-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_COMPAT:  added signal notification mechanism to sowakeup()
+ *	for use by the BBN network driver.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_compat.h"
+#endif	CMU
 
 #include "param.h"
 #include "systm.h"
@@ -258,6 +300,15 @@ sbwakeup(sb)
 		sb->sb_flags &= ~SB_WAIT;
 		wakeup((caddr_t)&sb->sb_cc);
 	}
+#if	CS_COMPAT
+	/*
+	 *  This feature is currently only needed by the BBN network
+	 *  compatibility driver.  If we decide to make it generally
+	 *  available, then the COMPAT conditional should change.
+	 */
+	if (sb->sb_signum && sb->sb_sigp->p_pid == sb->sb_sigpid)
+		psignal(sb->sb_sigp, sb->sb_signum);
+#endif	CS_COMPAT
 }
 
 /*
@@ -310,6 +361,25 @@ sowakeup(so, sb)
  * some of the available buffer space in the system buffer pool for the
  * socket.  The space should be released by calling sbrelease() when the
  * socket is destroyed.
+ *
+ * The routines sbappend() or sbappendrecord() are normally called to
+ * append new mbufs to a socket buffer, after checking that adequate
+ * space is available, comparing the function sbspace() with the amount
+ * of data to be added.  sbappendrecord() differs from sbappend() in
+ * that data supplied is treated as the beginning of a new record.
+ * Data is normally removed from a socket buffer in a protocol by
+ * first calling m_copy on the socket buffer mbuf chain and sending this
+ * to a peer, and then removing the data from the socket buffer with
+ * sbdrop() or sbdroprecord() when the data is acknowledged by the peer
+ * (or immediately in the case of unreliable protocols.)
+ *
+ * To place a sender's name, optionally, access rights, and data in a
+ * socket buffer sbappendaddr() should be used.  To place access rights
+ * and data in a socket buffer sbappendrights() should be used.  Note
+ * that unlike sbappend() and sbappendrecord(), these routines check
+ * for the caller that there will be enough space to store the data.
+ * Each fails if there is not enough space, or if it cannot find mbufs
+ * to store additional information in.
  */
 
 soreserve(so, sndcc, rcvcc)
@@ -330,16 +400,16 @@ bad:
 
 /*
  * Allot mbufs to a sockbuf.
- * Attempt to scale cc so that mbcnt doesn't become limiting
- * if buffering efficiency is near the normal case.
  */
 sbreserve(sb, cc)
 	struct sockbuf *sb;
 {
 
-	if ((unsigned) cc > (unsigned)SB_MAX * CLBYTES / (2 * MSIZE + CLBYTES))
+	if ((unsigned) cc > SB_MAX)
 		return (0);
+	/* someday maybe this routine will fail... */
 	sb->sb_hiwat = cc;
+	/* * 2 implies names can be no more than 1 mbuf each */
 	sb->sb_mbmax = MIN(cc * 2, SB_MAX);
 	return (1);
 }
@@ -358,26 +428,6 @@ sbrelease(sb)
 /*
  * Routines to add and remove
  * data from an mbuf queue.
- *
- * The routines sbappend() or sbappendrecord() are normally called to
- * append new mbufs to a socket buffer, after checking that adequate
- * space is available, comparing the function sbspace() with the amount
- * of data to be added.  sbappendrecord() differs from sbappend() in
- * that data supplied is treated as the beginning of a new record.
- * To place a sender's address, optional access rights, and data in a
- * socket receive buffer, sbappendaddr() should be used.  To place
- * access rights and data in a socket receive buffer, sbappendrights()
- * should be used.  In either case, the new data begins a new record.
- * Note that unlike sbappend() and sbappendrecord(), these routines check
- * for the caller that there will be enough space to store the data.
- * Each fails if there is not enough space, or if it cannot find mbufs
- * to store additional information in.
- *
- * Reliable protocols may use the socket send buffer to hold data
- * awaiting acknowledgement.  Data is normally copied from a socket
- * send buffer in a protocol with m_copy for output to a peer,
- * and then removing the data from the socket buffer with sbdrop()
- * or sbdroprecord() when the data is acknowledged by the peer.
  */
 
 /*
@@ -437,7 +487,7 @@ sbappendrecord(sb, m0)
  * to the receive queue of a socket.  Return 0 if
  * no space in sockbuf or insufficient mbufs.
  */
-sbappendaddr(sb, asa, m0, rights0)
+sbappendaddr(sb, asa, m0, rights0)		/* XXX */
 	register struct sockbuf *sb;
 	struct sockaddr *asa;
 	struct mbuf *rights0, *m0;
@@ -445,24 +495,29 @@ sbappendaddr(sb, asa, m0, rights0)
 	register struct mbuf *m, *n;
 	int space = sizeof (*asa);
 
-	for (m = m0; m; m = m->m_next)
+	m = m0;
+	if (m == 0)
+		panic("sbappendaddr");
+	do {
 		space += m->m_len;
+		m = m->m_next;
+	} while (m);
 	if (rights0)
 		space += rights0->m_len;
 	if (space > sbspace(sb))
 		return (0);
-	MGET(m, M_DONTWAIT, MT_SONAME);
+	m = m_get(M_DONTWAIT, MT_SONAME);
 	if (m == 0)
 		return (0);
 	*mtod(m, struct sockaddr *) = *asa;
 	m->m_len = sizeof (*asa);
-	if (rights0 && rights0->m_len) {
-		m->m_next = m_copy(rights0, 0, rights0->m_len);
-		if (m->m_next == 0) {
+	if (rights0) {
+		m->m_act = m_copy(rights0, 0, rights0->m_len);
+		if (m->m_act == 0) {
 			m_freem(m);
 			return (0);
 		}
-		sballoc(sb, m->m_next);
+		sballoc(sb, m->m_act);
 	}
 	sballoc(sb, m);
 	if (n = sb->sb_mb) {
@@ -471,24 +526,32 @@ sbappendaddr(sb, asa, m0, rights0)
 		n->m_act = m;
 	} else
 		sb->sb_mb = m;
-	if (m->m_next)
-		m = m->m_next;
-	if (m0)
-		sbcompress(sb, m0, m);
+	if (m->m_act)
+		m = m->m_act;
+	sballoc(sb, m0);
+	m->m_act = m0;
+	m = m0->m_next;
+	m0->m_next = 0;
+	if (m)
+		sbcompress(sb, m, m0);
 	return (1);
 }
 
-sbappendrights(sb, m0, rights)
+#ifdef notdef
+sbappendrights(sb, rights, m0)
 	struct sockbuf *sb;
-	struct mbuf *rights, *m0;
+	struct mbuf *rights, *m;
 {
 	register struct mbuf *m, *n;
 	int space = 0;
 
-	if (rights == 0)
+	m = m0;
+	if (m == 0 || rights == 0)
 		panic("sbappendrights");
-	for (m = m0; m; m = m->m_next)
+	do {
 		space += m->m_len;
+		m = m->m_next;
+	} while (m);
 	space += rights->m_len;
 	if (space > sbspace(sb))
 		return (0);
@@ -501,11 +564,16 @@ sbappendrights(sb, m0, rights)
 			n = n->m_act;
 		n->m_act = m;
 	} else
-		sb->sb_mb = m;
-	if (m0)
-		sbcompress(sb, m0, m);
+		n->m_act = m;
+	sballoc(sb, m0);
+	m->m_act = m0;
+	m = m0->m_next;
+	m0->m_next = 0;
+	if (m)
+		sbcompress(sb, m, m0);
 	return (1);
 }
+#endif
 
 /*
  * Compress mbuf chain m into the socket
@@ -523,8 +591,7 @@ sbcompress(sb, m, n)
 			continue;
 		}
 		if (n && n->m_off <= MMAXOFF && m->m_off <= MMAXOFF &&
-		    (n->m_off + n->m_len + m->m_len) <= MMAXOFF &&
-		    n->m_type == m->m_type) {
+		    (n->m_off + n->m_len + m->m_len) <= MMAXOFF) {
 			bcopy(mtod(m, caddr_t), mtod(n, caddr_t) + n->m_len,
 			    (unsigned)m->m_len);
 			n->m_len += m->m_len;
@@ -553,8 +620,8 @@ sbflush(sb)
 
 	if (sb->sb_flags & SB_LOCK)
 		panic("sbflush");
-	while (sb->sb_mbcnt)
-		sbdrop(sb, (int)sb->sb_cc);
+	if (sb->sb_cc)
+		sbdrop(sb, sb->sb_cc);
 	if (sb->sb_cc || sb->sb_mbcnt || sb->sb_mb)
 		panic("sbflush 2");
 }
@@ -562,6 +629,7 @@ sbflush(sb)
 /*
  * Drop data from (the front of) a sockbuf.
  */
+struct mbuf *
 sbdrop(sb, len)
 	register struct sockbuf *sb;
 	register int len;
@@ -599,12 +667,14 @@ sbdrop(sb, len)
 		m->m_act = next;
 	} else
 		sb->sb_mb = next;
+	return (sb->sb_mb);
 }
 
 /*
  * Drop a record off the front of a sockbuf
  * and move the next record to the front.
  */
+struct mbuf *
 sbdroprecord(sb)
 	register struct sockbuf *sb;
 {
@@ -618,4 +688,5 @@ sbdroprecord(sb)
 			MFREE(m, mn);
 		} while (m = mn);
 	}
+	return (sb->sb_mb);
 }

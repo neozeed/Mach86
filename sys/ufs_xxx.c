@@ -1,10 +1,59 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ufs_xxx.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ufs_xxx.c	6.4 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 27-Sep-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	Added simple-minded emulation for ofstat() on a pipe.
+ *	[V1(1)]
+ *
+ * 18-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_RFS:  changed to enable remote names for all namei()
+ *	calls in this module.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_compat.h"
+#include "cs_rfs.h"
+#endif	CMU
 
 #include "param.h"
 #include "systm.h"
@@ -19,6 +68,15 @@
 #ifdef COMPAT
 #include "file.h"
 #include "kernel.h"
+#if	CS_RFS
+ 
+/*
+ *  Force all namei() calls to permit remote names since this module has
+ *  been updated.
+ */
+#undef	namei
+#define	namei	rnamei
+#endif	CS_RFS
 
 /*
  * Oh, how backwards compatibility is ugly!!!
@@ -51,7 +109,40 @@ ofstat()
 
 	fp = getinode(uap->fd);
 	if (fp == NULL)
+#if	CS_COMPAT
+	{
+		/*
+		 *  Some programs may want to do old style fstat() calls on a
+		 *  pipe even though they are no longer files.  The only one
+		 *  encountered so far has been the CAT program which checks if
+		 *  its input is the same as its output.  This requires only that
+		 *  the device and i_numbers of both pipes differ which should
+		 *  work out (below).
+		 */
+		if (u.u_error == EINVAL && (fp=getf(uap->fd)) && (fp->f_flag&FPIPE))
+		{
+			struct inode pip;
+
+			u.u_error = 0;
+			pip.i_flag = 0;			/* prevent IUPDAT */
+			pip.i_dev = rootdev;
+			pip.i_number = (ino_t)fp->f_data;	/* something hopefully unique */
+			pip.i_mode = IFREG;
+			pip.i_nlink = 0;
+			pip.i_uid = u.u_uid;
+			pip.i_gid = u.u_gid;
+			pip.i_rdev = rootdev;
+			pip.i_size = 0;
+			pip.i_atime = time.tv_sec;
+			pip.i_mtime = time.tv_sec;
+			pip.i_ctime = time.tv_sec;
+			ostat1(&pip, uap->sb);
+		}
+ 		return;
+	}
+#else	CS_COMPAT
 		return;
+#endif	CS_COMPAT
 	ostat1((struct inode *)fp->f_data, uap->sb);
 }
 

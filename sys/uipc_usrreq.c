@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)uipc_usrreq.c	7.1 (Berkeley) 6/5/86
+ *	@(#)uipc_usrreq.c	6.15 (Berkeley) 6/17/85
  */
 
 #include "param.h"
@@ -15,7 +42,7 @@
 #include "socket.h"
 #include "socketvar.h"
 #include "unpcb.h"
-#include "un.h"
+#include "../h/un.h"
 #include "inode.h"
 #include "file.h"
 #include "stat.h"
@@ -29,7 +56,7 @@
  *	need a proper out-of-band
  */
 struct	sockaddr sun_noname = { AF_UNIX };
-ino_t	unp_ino;			/* prototype for fake inode numbers */
+ino_t	unp_ino;				/* fake inode numbers */
 
 /*ARGSUSED*/
 uipc_usrreq(so, req, m, nam, rights)
@@ -41,8 +68,6 @@ uipc_usrreq(so, req, m, nam, rights)
 	register struct socket *so2;
 	int error = 0;
 
-	if (req == PRU_CONTROL)
-		return (EOPNOTSUPP);
 	if (req != PRU_SEND && rights && rights->m_len) {
 		error = EOPNOTSUPP;
 		goto release;
@@ -79,7 +104,8 @@ uipc_usrreq(so, req, m, nam, rights)
 		break;
 
 	case PRU_CONNECT2:
-		error = unp_connect2(so, (struct socket *)nam);
+		error = unp_connect2(so, (struct mbuf *)0,
+		    (struct socket *)nam);
 		break;
 
 	case PRU_DISCONNECT:
@@ -87,19 +113,9 @@ uipc_usrreq(so, req, m, nam, rights)
 		break;
 
 	case PRU_ACCEPT:
-		/*
-		 * Pass back name of connected socket,
-		 * if it was bound and we are still connected
-		 * (our peer may have closed already!).
-		 */
-		if (unp->unp_conn && unp->unp_conn->unp_addr) {
-			nam->m_len = unp->unp_conn->unp_addr->m_len;
-			bcopy(mtod(unp->unp_conn->unp_addr, caddr_t),
-			    mtod(nam, caddr_t), (unsigned)nam->m_len);
-		} else {
-			nam->m_len = sizeof(sun_noname);
-			*(mtod(nam, struct sockaddr *)) = sun_noname;
-		}
+		nam->m_len = unp->unp_remaddr->m_len;
+		bcopy(mtod(unp->unp_remaddr, caddr_t),
+		    mtod(nam, caddr_t), (unsigned)nam->m_len);
 		break;
 
 	case PRU_SHUTDOWN:
@@ -121,13 +137,13 @@ uipc_usrreq(so, req, m, nam, rights)
 				break;
 			so2 = unp->unp_conn->unp_socket;
 			/*
-			 * Adjust backpressure on sender
+			 * Transfer resources back to send port
 			 * and wakeup any waiting to write.
 			 */
-			snd->sb_mbmax += unp->unp_mbcnt - rcv->sb_mbcnt;
-			unp->unp_mbcnt = rcv->sb_mbcnt;
-			snd->sb_hiwat += unp->unp_cc - rcv->sb_cc;
-			unp->unp_cc = rcv->sb_cc;
+			snd->sb_mbmax += rcv->sb_mbmax - rcv->sb_mbcnt;
+			rcv->sb_mbmax = rcv->sb_mbcnt;
+			snd->sb_hiwat += rcv->sb_hiwat - rcv->sb_cc;
+			rcv->sb_hiwat = rcv->sb_cc;
 			sowwakeup(so2);
 #undef snd
 #undef rcv
@@ -139,16 +155,9 @@ uipc_usrreq(so, req, m, nam, rights)
 		break;
 
 	case PRU_SEND:
-		if (rights) {
-			error = unp_internalize(rights);
-			if (error)
-				break;
-		}
 		switch (so->so_type) {
 
-		case SOCK_DGRAM: {
-			struct sockaddr *from;
-
+		case SOCK_DGRAM:
 			if (nam) {
 				if (unp->unp_conn) {
 					error = EISCONN;
@@ -164,24 +173,36 @@ uipc_usrreq(so, req, m, nam, rights)
 				}
 			}
 			so2 = unp->unp_conn->unp_socket;
-			if (unp->unp_addr)
-				from = mtod(unp->unp_addr, struct sockaddr *);
-			else
-				from = &sun_noname;
-			if (sbspace(&so2->so_rcv) > 0 &&
-			    sbappendaddr(&so2->so_rcv, from, m, rights)) {
-				sorwakeup(so2);
-				m = 0;
-			} else
-				error = ENOBUFS;
+			/* BEGIN XXX */
+			if (rights) {
+				error = unp_internalize(rights);
+				if (error)
+					break;
+			}
+			if (sbspace(&so2->so_rcv) > 0) {
+				/*
+				 * There's no record of source socket's
+				 * name, so send null name for the moment.
+				 */
+				if (sbappendaddr(&so2->so_rcv,
+				    &sun_noname, m, rights)) {
+					sorwakeup(so2);
+					m = 0;
+				} else
+					error = ENOBUFS;
+			}
+			/* END XXX */
 			if (nam)
 				unp_disconnect(unp);
 			break;
-		}
 
 		case SOCK_STREAM:
 #define	rcv (&so2->so_rcv)
 #define	snd (&so->so_snd)
+			if (rights && rights->m_len) {
+				error = EOPNOTSUPP;
+				break;
+			}
 			if (so->so_state & SS_CANTSENDMORE) {
 				error = EPIPE;
 				break;
@@ -190,19 +211,15 @@ uipc_usrreq(so, req, m, nam, rights)
 				panic("uipc 3");
 			so2 = unp->unp_conn->unp_socket;
 			/*
-			 * Send to paired receive port, and then reduce
-			 * send buffer hiwater marks to maintain backpressure.
+			 * Send to paired receive port, and then
+			 * give it enough resources to hold what it already has.
 			 * Wake up readers.
 			 */
-			if (rights)
-				(void)sbappendrights(rcv, m, rights);
-			else
-				sbappend(rcv, m);
-			snd->sb_mbmax -=
-			    rcv->sb_mbcnt - unp->unp_conn->unp_mbcnt;
-			unp->unp_conn->unp_mbcnt = rcv->sb_mbcnt;
-			snd->sb_hiwat -= rcv->sb_cc - unp->unp_conn->unp_cc;
-			unp->unp_conn->unp_cc = rcv->sb_cc;
+			sbappend(rcv, m);
+			snd->sb_mbmax -= rcv->sb_mbcnt - rcv->sb_mbmax;
+			rcv->sb_mbmax = rcv->sb_mbcnt;
+			snd->sb_hiwat -= rcv->sb_cc - rcv->sb_hiwat;
+			rcv->sb_hiwat = rcv->sb_cc;
 			sorwakeup(so2);
 			m = 0;
 #undef snd
@@ -218,6 +235,11 @@ uipc_usrreq(so, req, m, nam, rights)
 		unp_drop(unp, ECONNABORTED);
 		break;
 
+/* SOME AS YET UNIMPLEMENTED HOOKS */
+	case PRU_CONTROL:
+		return (EOPNOTSUPP);
+
+/* END UNIMPLEMENTED HOOKS */
 	case PRU_SENSE:
 		((struct stat *) m)->st_blksize = so->so_snd.sb_hiwat;
 		if (so->so_type == SOCK_STREAM && unp->unp_conn != 0) {
@@ -225,9 +247,7 @@ uipc_usrreq(so, req, m, nam, rights)
 			((struct stat *) m)->st_blksize += so2->so_rcv.sb_cc;
 		}
 		((struct stat *) m)->st_dev = NODEV;
-		if (unp->unp_ino == 0)
-			unp->unp_ino = unp_ino++;
-		((struct stat *) m)->st_ino = unp->unp_ino;
+		((struct stat *) m)->st_ino = unp_ino++;
 		return (0);
 
 	case PRU_RCVOOB:
@@ -241,11 +261,6 @@ uipc_usrreq(so, req, m, nam, rights)
 		break;
 
 	case PRU_PEERADDR:
-		if (unp->unp_conn && unp->unp_conn->unp_addr) {
-			nam->m_len = unp->unp_conn->unp_addr->m_len;
-			bcopy(mtod(unp->unp_conn->unp_addr, caddr_t),
-			    mtod(m, caddr_t), (unsigned)m->m_len);
-		}
 		break;
 
 	case PRU_SLOWTIMO:
@@ -261,20 +276,17 @@ release:
 }
 
 /*
- * Both send and receive buffers are allocated PIPSIZ bytes of buffering
- * for stream sockets, although the total for sender and receiver is
- * actually only PIPSIZ.
+ * We assign all buffering for stream sockets to the source,
+ * as that is where the flow control is implemented.
  * Datagram sockets really use the sendspace as the maximum datagram size,
  * and don't really want to reserve the sendspace.  Their recvspace should
  * be large enough for at least one max-size datagram plus address.
  */
 #define	PIPSIZ	4096
 int	unpst_sendspace = PIPSIZ;
-int	unpst_recvspace = PIPSIZ;
+int	unpst_recvspace = 0;
 int	unpdg_sendspace = 2*1024;	/* really max datagram size */
 int	unpdg_recvspace = 4*1024;
-
-int	unp_rights;			/* file descriptors in flight */
 
 unp_attach(so)
 	struct socket *so;
@@ -319,10 +331,8 @@ unp_detach(unp)
 		unp_drop(unp->unp_refs, ECONNRESET);
 	soisdisconnected(unp->unp_socket);
 	unp->unp_socket->so_pcb = 0;
-	m_freem(unp->unp_addr);
+	m_freem(unp->unp_remaddr);
 	(void) m_free(dtom(unp));
-	if (unp_rights)
-		unp_gc();
 }
 
 unp_bind(unp, nam)
@@ -335,7 +345,7 @@ unp_bind(unp, nam)
 	int error;
 
 	ndp->ni_dirp = soun->sun_path;
-	if (unp->unp_inode != NULL || nam->m_len == MLEN)
+	if (nam->m_len == MLEN)
 		return (EINVAL);
 	*(mtod(nam, caddr_t) + nam->m_len) = 0;
 /* SHOULD BE ABLE TO ADOPT EXISTING AND wakeup() ALA FIFO's */
@@ -358,7 +368,6 @@ unp_bind(unp, nam)
 	}
 	ip->i_socket = unp->unp_socket;
 	unp->unp_inode = ip;
-	unp->unp_addr = m_copy(nam, 0, (int)M_COPYALL);
 	iunlock(ip);			/* but keep reference */
 	return (0);
 }
@@ -409,14 +418,15 @@ unp_connect(so, nam)
 		error = ECONNREFUSED;
 		goto bad;
 	}
-	error = unp_connect2(so, so2);
+	error = unp_connect2(so, nam, so2);
 bad:
 	iput(ip);
 	return (error);
 }
 
-unp_connect2(so, so2)
+unp_connect2(so, sonam, so2)
 	register struct socket *so;
+	struct mbuf *sonam;
 	register struct socket *so2;
 {
 	register struct unpcb *unp = sotounpcb(so);
@@ -436,6 +446,8 @@ unp_connect2(so, so2)
 
 	case SOCK_STREAM:
 		unp2->unp_conn = unp;
+		if (sonam)
+			unp2->unp_remaddr = m_copy(sonam, 0, (int)M_COPYALL);
 		soisconnected(so2);
 		soisconnected(so);
 		break;
@@ -508,7 +520,7 @@ unp_drop(unp, errno)
 	unp_disconnect(unp);
 	if (so->so_head) {
 		so->so_pcb = (caddr_t) 0;
-		m_freem(unp->unp_addr);
+		m_freem(unp->unp_remaddr);
 		(void) m_free(dtom(unp));
 		sofree(so);
 	}
@@ -545,7 +557,6 @@ unp_externalize(rights)
 		fp = *rp;
 		u.u_ofile[f] = fp;
 		fp->f_msgcount--;
-		unp_rights--;
 		*(int *)rp++ = f;
 	}
 	return (0);
@@ -569,7 +580,6 @@ unp_internalize(rights)
 		*rp++ = fp;
 		fp->f_count++;
 		fp->f_msgcount++;
-		unp_rights++;
 	}
 	return (0);
 }
@@ -620,9 +630,11 @@ restart:
 	for (fp = file; fp < fileNFILE; fp++) {
 		if (fp->f_count == 0)
 			continue;
-		if (fp->f_count == fp->f_msgcount && (fp->f_flag & FMARK) == 0)
-			while (fp->f_msgcount)
-				unp_discard(fp);
+		if (fp->f_count == fp->f_msgcount && (fp->f_flag&FMARK)==0) {
+			if (fp->f_type != DTYPE_SOCKET)
+				panic("unp_gc");
+			(void) soshutdown((struct socket *)fp->f_data, 0);
+		}
 	}
 	unp_gcing = 0;
 }
@@ -673,6 +685,5 @@ unp_discard(fp)
 {
 
 	fp->f_msgcount--;
-	unp_rights--;
 	closef(fp);
 }

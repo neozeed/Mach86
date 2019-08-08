@@ -1,10 +1,61 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)map.h	7.1 (Berkeley) 6/4/86
+ *	@(#)map.h	6.2 (Berkeley) 6/8/85
  */
+#if	CMU
+
+/*
+ ************************************************************************
+ * HISTORY
+ * 25-Feb-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Installed VM changes.
+ *
+ ************************************************************************
+ */
+#ifdef	KERNEL
+#include "mach_vm.h"
+#else	KERNEL
+#include <sys/features.h>
+#endif	KERNEL
+#endif	CMU
+
+#if	MACH_VM
+#ifdef	KERNEL
+#include "../vm/vm_map.h"
+#else	KERNEL
+#include <vm/vm_map.h>
+#endif	KERNEL
+#endif	MACH_VM
 
 /*
  * Resource Allocation Maps.
@@ -45,6 +96,11 @@ struct	map *swapmap;
 int	nswapmap;
 struct	map *argmap;
 #define	ARGMAPSIZE	16
+#if	MACH_VM
+vm_map_t	user_pt_map;
+vm_map_t	mb_map;
+#else	MACH_VM
 struct	map *kernelmap;
 struct	map *mbmap;
+#endif	MACH_VM
 #endif

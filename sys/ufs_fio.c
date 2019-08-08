@@ -1,10 +1,57 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ufs_fio.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ufs_fio.c	6.5 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 23-May-86  David Golub (dbg) at Carnegie-Mellon University
+ *	Restored check for attempting to write text file in use.
+ *
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 19-Oct-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_RFS:  enabled remote namei() processing for all
+ *	routines in this module.
+ *	[V1(1)]
+ **********************************************************************
+ */
+ 
+#include "cs_rfs.h"
+#include "mach_vm.h"
+#endif	CMU
 
 #include "../machine/reg.h"
 
@@ -21,6 +68,16 @@
 #include "socket.h"
 #include "socketvar.h"
 #include "proc.h"
+
+#if	CS_RFS
+ 
+/*
+ *  Force all namei() calls to permit remote names since this module has
+ *  been updated.
+ */
+#undef	namei
+#define	namei	rnamei
+#endif	CS_RFS
 
 /*
  * Check mode permission on inode pointer.
@@ -63,7 +120,11 @@ access(ip, mode)
 		 * we fail, we can't allow writing.
 		 */
 		if (ip->i_flag&ITEXT)
+#if	MACH_VM
+			text_uncache(ip);
+#else	MACH_VM
 			xrele(ip);
+#endif	MACH_VM
 		if (ip->i_flag & ITEXT) {
 			u.u_error = ETXTBSY;
 			return (1);

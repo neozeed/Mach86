@@ -1,10 +1,53 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)kern_time.c	7.1 (Berkeley) 6/5/86
+ *	@(#)kern_time.c	6.5 (Berkeley) 6/8/85
  */
+#if CMU
+
+/*
+ ************************************************************************
+ * HISTORY
+ * 22-Mar-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Made the splhigh changes conditional on CS_GENERIC.
+ *
+ *  6-Mar-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Changed spl7() into splhigh().
+ *
+ ************************************************************************
+ */
+
+#include "cs_generic.h"
+#endif CMU
 
 #include "../machine/reg.h"
 
@@ -32,8 +75,13 @@ gettimeofday()
 		struct	timezone *tzp;
 	} *uap = (struct a *)u.u_ap;
 	struct timeval atv;
+	int s;
 
-	microtime(&atv);
+#if	CS_GENERIC
+	s = splhigh(); atv = time; splx(s);
+#else	CS_GENERIC
+	s = spl7(); atv = time; splx(s);
+#endif	CS_GENERIC
 	u.u_error = copyout((caddr_t)&atv, (caddr_t)uap->tp, sizeof (atv));
 	if (u.u_error)
 		return;
@@ -74,14 +122,15 @@ setthetime(tv)
 		return;
 /* WHAT DO WE DO ABOUT PENDING REAL-TIME TIMEOUTS??? */
 	boottime.tv_sec += tv->tv_sec - time.tv_sec;
+#if	CS_GENERIC
 	s = splhigh(); time = *tv; splx(s);
+#else	CS_GENERIC
+	s = spl7(); time = *tv; splx(s);
+#endif	CS_GENERIC
 	resettodr();
 }
 
-extern	int tickadj;			/* "standard" clock skew, us./tick */
-int	tickdelta;			/* current clock skew, us. per tick */
-long	timedelta;			/* unapplied time correction, us. */
-long	bigadj = 1000000;		/* use 10x skew above bigadj us. */
+int adjtimedelta;
 
 adjtime()
 {
@@ -89,9 +138,8 @@ adjtime()
 		struct timeval *delta;
 		struct timeval *olddelta;
 	} *uap = (struct a *)u.u_ap;
+
 	struct timeval atv, oatv;
-	register long ndelta;
-	int s;
 
 	if (!suser()) 
 		return;
@@ -99,26 +147,13 @@ adjtime()
 		sizeof (struct timeval));
 	if (u.u_error)
 		return;
-	ndelta = atv.tv_sec * 1000000 + atv.tv_usec;
-	if (timedelta == 0)
-		if (ndelta > bigadj)
-			tickdelta = 10 * tickadj;
-		else
-			tickdelta = tickadj;
-	if (ndelta % tickdelta)
-		ndelta = ndelta / tickadj * tickadj;
-
-	s = splclock();
 	if (uap->olddelta) {
-		oatv.tv_sec = timedelta / 1000000;
-		oatv.tv_usec = timedelta % 1000000;
-	}
-	timedelta = ndelta;
-	splx(s);
-
-	if (uap->olddelta)
+		oatv.tv_sec = adjtimedelta / 1000000;
+		oatv.tv_usec = adjtimedelta % 1000000;
 		(void) copyout((caddr_t)&oatv, (caddr_t)uap->olddelta,
 			sizeof (struct timeval));
+	}
+	adjtimedelta = atv.tv_sec * 1000000 + atv.tv_usec;
 }
 
 /*
@@ -155,7 +190,11 @@ getitimer()
 		u.u_error = EINVAL;
 		return;
 	}
-	s = splclock();
+#if	CS_GENERIC
+	s = splhigh();
+#else	CS_GENERIC
+	s = spl7();
+#endif	CS_GENERIC
 	if (uap->which == ITIMER_REAL) {
 		/*
 		 * Convert from absoulte to relative time in .it_value
@@ -183,7 +222,7 @@ setitimer()
 		u_int	which;
 		struct	itimerval *itv, *oitv;
 	} *uap = (struct a *)u.u_ap;
-	struct itimerval aitv, *aitvp;
+	struct itimerval aitv;
 	int s;
 	register struct proc *p = u.u_procp;
 
@@ -191,22 +230,23 @@ setitimer()
 		u.u_error = EINVAL;
 		return;
 	}
-	aitvp = uap->itv;
+	u.u_error = copyin((caddr_t)uap->itv, (caddr_t)&aitv,
+	    sizeof (struct itimerval));
+	if (u.u_error)
+		return;
 	if (uap->oitv) {
 		uap->itv = uap->oitv;
 		getitimer();
 	}
-	if (aitvp == 0)
-		return;
-	u.u_error = copyin((caddr_t)aitvp, (caddr_t)&aitv,
-	    sizeof (struct itimerval));
-	if (u.u_error)
-		return;
 	if (itimerfix(&aitv.it_value) || itimerfix(&aitv.it_interval)) {
 		u.u_error = EINVAL;
 		return;
 	}
-	s = splclock();
+#if	CS_GENERIC
+	s = spl7();
+#else	CS_GENERIC
+	s = splhigh();
+#endif	CS_GENERIC
 	if (uap->which == ITIMER_REAL) {
 		untimeout(realitexpire, (caddr_t)p);
 		if (timerisset(&aitv.it_value)) {
@@ -238,7 +278,11 @@ realitexpire(p)
 		return;
 	}
 	for (;;) {
-		s = splclock();
+#if	CS_GENERIC
+		s = splhigh();
+#else	CS_GENERIC
+		s = spl7();
+#endif	CS_GENERIC
 		timevaladd(&p->p_realtimer.it_value,
 		    &p->p_realtimer.it_interval);
 		if (timercmp(&p->p_realtimer.it_value, &time, >)) {

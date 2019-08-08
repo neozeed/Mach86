@@ -1,0 +1,13 @@
+all: MACH SINGLE_CPU GENERIC MACHRT
+
+MACH: sed/MACH.sed MASTER
+	sed -f sed/MACH.sed < MASTER > MACH
+
+SINGLE_CPU: sed/SINGLE_CPU.sed MASTER
+	sed -f sed/SINGLE_CPU.sed < MASTER > SINGLE_CPU
+
+GENERIC: sed/GENERIC.sed MASTER
+	sed -f sed/GENERIC.sed < MASTER > GENERIC
+
+MACHRT: sed/MACHRT.sed MASTER
+	sed -f sed/MACHRT.sed < MASTER > MACHRT

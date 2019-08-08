@@ -1,11 +1,82 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ufs_inode.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ufs_inode.c	6.17 (Berkeley) 9/4/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 31-May-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Uncache inodes when the grow.  Initialize pager_id field in
+ *	iget.
+ *
+ * 01-Mar-86  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_GENERIC: suppress inode time updates if "iupdnot"
+ *	variable is non-zero (TEMP).
+ *
+ * 24-Feb-86  Bill Bolosky (bolosky) at Carnegie-Mellon University
+ *	Added #if CS_COMPAT around check for IFMPC in iupdat.
+ *
+ * 11-Feb-86  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_OLDFS: set i_blocks to zero for old file system
+ *	inodes on read (this is now estimated at stat() time).
+ *
+ * 26-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 26-Aug-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_ICHK:  Added inode count consistency check macros.
+ *	[V1(1)].
+ *
+ * 13-Jun-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_OLDFS:  Modified iget() and iupdat() to translate to/from
+ *	old/new style inode format and itrunc() to properly handle old
+ *	file system block pointers;  re-enabled ifind() routine which
+ *	is still needed by the old ialloc() code.
+ *	[V1(1)].
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_ichk.h"
+#include "cs_generic.h"
+#include "cs_oldfs.h"
+#include "mach_vm.h"
+#endif	CMU
 
+#if	MACH_VM
+#include "../vm/vm_pager.h"
+#endif	MACH_VM
 #include "param.h"
 #include "systm.h"
 #include "mount.h"
@@ -34,6 +105,14 @@ union ihead {				/* inode LRU cache, Chris Maltby */
 
 struct inode *ifreeh, **ifreet;
 
+#if	CS_ICHK
+/* 
+ *  Define these in one place to avoid string constant replication.
+ */
+char *PANICMSG_IINCR = "iincr";
+char *PANICMSG_IDECR = "idecr";
+
+#endif	CS_ICHK
 /*
  * Initialize hash links for inodes
  * and build inode free list.
@@ -64,6 +143,9 @@ ihinit()
 	ip->i_freef = NULL;
 }
 
+#if	CS_OLDFS
+#define	notdef
+#endif	CS_OLDFS
 #ifdef notdef
 /*
  * Find an inode if it is incore.
@@ -85,6 +167,9 @@ ifind(dev, ino)
 	return ((struct inode *)0);
 }
 #endif notdef
+#if	CS_OLDFS
+#undef	notdef
+#endif	CS_OLDFS
 
 /*
  * Look up an inode by device,inumber.
@@ -113,6 +198,7 @@ iget(dev, fs, ino)
 	register struct buf *bp;
 	register struct dinode *dp;
 	register struct inode *iq;
+
 
 loop:
 	ih = &ihead[INOHASH(dev, ino)];
@@ -149,7 +235,11 @@ loop:
 				ip->i_freef = NULL;
 				ip->i_freeb = NULL;
 			}
+#if	CS_ICHK
+			iincr_chk(ip);
+#else	CS_ICHK
 			ip->i_count++;
+#endif	CS_ICHK
 			ip->i_flag |= ILOCKED;
 			return(ip);
 		}
@@ -175,12 +265,19 @@ loop:
 	 */
 	remque(ip);
 	insque(ip, ih);
+#if	MACH_VM
+	ip->pager_id = VM_PAGER_ID_NULL;
+#endif	MACH_VM
 	ip->i_dev = dev;
 	ip->i_fs = fs;
 	ip->i_number = ino;
 	cacheinval(ip);
 	ip->i_flag = ILOCKED;
+#if	CS_ICHK
+	iincr_chk(ip);
+#else	CS_ICHK
 	ip->i_count++;
+#endif	CS_ICHK
 	ip->i_lastr = 0;
 #ifdef QUOTA
 	dqrele(ip->i_dquot);
@@ -213,8 +310,63 @@ loop:
 		return(NULL);
 	}
 	dp = bp->b_un.b_dino;
+#if	CS_OLDFS
+	/*
+	 *  The mode, nlink, uid and gid fields are identical in both versions.
+	 *  The size field used to be a longword and is now a quadword.  The
+	 *  disk addresses are no longer compressed on disk but there is in-
+	 *  core space for 15 pointers (12 direct and 3 indirect) so the old 13
+	 *  (10 direct and 3 indirect) can share the same space with the direct
+	 *  pointer overlapping into the indirect area.  The file times are
+	 *  now stored in memory with an expansion word which is currently
+	 *  unused.  The blocks used field is new and set to zero for old file
+	 *  systems for now (until something else turns out be needed).
+	 */
+	if (isoldfs(fs)) {
+		register char *p1, *p2;	/* wish these were really registers */
+		int i,j;
+#define		oi	((struct oinode *)dp)
+
+		oi = oi + itooo(fs, ino);
+		ip->i_mode = oi->oi_mode;
+		ip->i_nlink = oi->oi_nlink;
+		ip->i_uid = oi->oi_uid;
+		ip->i_gid = oi->oi_gid;
+		ip->i_size = oi->oi_size;
+		p2 = (char *)oi->oi_addr;
+		for (j=2; --j >= 0; ) {
+		    if (j) {
+			i = NOADDR-NIADDR;
+			p1 = (char *)ip->i_db;
+		    }
+		    else {
+			i = NIADDR;
+			p1 = (char *)ip->i_ib;
+		    }
+		    for (; --i >= 0; ) {
+			*p1++ = *p2++;
+			*p1++ = *p2++;
+			*p1++ = *p2++;
+			*p1++ = 0;
+		    }
+		}
+		ip->i_db[NDADDR-2] = 0;
+		ip->i_db[NDADDR-1] = 0;
+		ip->i_atime = oi->oi_atime;
+		ip->i_mtime = oi->oi_mtime;
+		ip->i_ctime = oi->oi_ctime;
+		ip->i_blocks = 0;
+#undef		oi
+	}
+	else
+	{
+		dp += itoo(fs, ino);
+		ip->i_ic = dp->di_ic;
+	}
+#else	CS_OLDFS
 	dp += itoo(fs, ino);
 	ip->i_ic = dp->di_ic;
+#endif	CS_OLDFS
 	brelse(bp);
 #ifdef QUOTA
 	if (ip->i_mode == 0)
@@ -316,9 +468,16 @@ irele(ip)
 		ifreet = &ip->i_freef;
 	} else if (!(ip->i_flag & ILOCKED))
 		ITIMES(ip, &time, &time);
+#if	CS_ICHK
+	idecr_chk(ip);
+#else	CS_ICHK
 	ip->i_count--;
+#endif	CS_ICHK
 }
 
+#if	CS_GENERIC
+int iupdnot = 0;	/* TEMP: suppress time updates if true */
+#endif	CS_GENERIC
 /*
  * Check accessed and update flags on
  * an inode structure.
@@ -346,6 +505,10 @@ iupdat(ip, ta, tm, waitfor)
 			brelse(bp);
 			return;
 		}
+#if	CS_GENERIC
+		if (iupdnot)
+			ip->i_flag &= ~(ICHG);
+#endif	CS_GENERIC
 		if (ip->i_flag&IACC)
 			ip->i_atime = ta->tv_sec;
 		if (ip->i_flag&IUPD)
@@ -353,8 +516,54 @@ iupdat(ip, ta, tm, waitfor)
 		if (ip->i_flag&ICHG)
 			ip->i_ctime = time.tv_sec;
 		ip->i_flag &= ~(IUPD|IACC|ICHG|IMOD);
+#if	CS_OLDFS
+		if (isoldfs(fp)) {
+			register char *p1, *p2;
+			int i,j;
+#define			oi	((struct oinode *)dp)
+
+			oi = (struct oinode *)bp->b_un.b_dino + itooo(fp, ip->i_number);
+			oi->oi_mode = ip->i_mode;
+			oi->oi_nlink = ip->i_nlink;
+			oi->oi_uid = ip->i_uid;
+			oi->oi_gid = ip->i_gid;
+			oi->oi_size = ip->i_size;
+			p1 = (char *)oi->oi_addr;
+			for (j=2; --j >= 0; ) {
+				if (j) {
+					i = NOADDR-NIADDR;
+					p2 = (char *)ip->i_db;
+				}
+				else {
+					i = NIADDR;
+					p2 = (char *)ip->i_ib;
+				}
+				for(; --i >= 0;) {
+					*p1++ = *p2++;
+					*p1++ = *p2++;
+					*p1++ = *p2++;
+#if CS_COMPAT
+					if(*p2++ != 0 && (ip->i_mode&IFMT)!=IFMPC
+					   && (ip->i_mode&IFMT)!=IFMPB)
+#else CS_COMPAT
+					if (*p2++ != 0)
+#endif CS_COMPAT
+						printf("iaddress > 2^24\n");
+				}
+			}
+			oi->oi_atime = ip->i_atime;
+			oi->oi_mtime = ip->i_mtime;
+			oi->oi_ctime = ip->i_ctime;
+#undef		oi
+		}
+		else {
+			dp = bp->b_un.b_dino + itoo(fp, ip->i_number);
+			dp->di_ic = ip->i_ic;
+		}
+#else	CS_OLDFS
 		dp = bp->b_un.b_dino + itoo(fp, ip->i_number);
 		dp->di_ic = ip->i_ic;
+#endif	CS_OLDFS
 		if (waitfor)
 			bwrite(bp);
 		else
@@ -378,11 +587,11 @@ itrunc(oip, length)
 	u_long length;
 {
 	register daddr_t lastblock;
-	daddr_t bn, lbn, lastiblock[NIADDR];
+	daddr_t bn, lastiblock[NIADDR];
 	register struct fs *fs;
 	register struct inode *ip;
 	struct buf *bp;
-	int offset, osize, size, count, level, s;
+	int offset, lbn, osize, size, count, level, s;
 	long nblocks, blocksreleased = 0;
 	register int i;
 	dev_t dev;
@@ -404,6 +613,10 @@ itrunc(oip, length)
 	fs = oip->i_fs;
 	lastblock = lblkno(fs, length + fs->fs_bsize - 1) - 1;
 	lastiblock[SINGLE] = lastblock - NDADDR;
+#if	CS_OLDFS
+	if (isoldfs(fs))
+	    lastiblock[SINGLE] += NDADDR-(NOADDR-NIADDR);
+#endif	CS_OLDFS
 	lastiblock[DOUBLE] = lastiblock[SINGLE] - NINDIR(fs);
 	lastiblock[TRIPLE] = lastiblock[DOUBLE] - NINDIR(fs) * NINDIR(fs);
 	nblocks = btodb(fs->fs_bsize);
@@ -427,11 +640,16 @@ itrunc(oip, length)
 		size = blksize(fs, oip, lbn);
 		count = howmany(size, DEV_BSIZE);
 		dev = oip->i_dev;
+#if	MACH_VM
+		if (oip->pager_id != VM_PAGER_ID_NULL)
+			vm_object_uncache(vm_pager_inode, oip->pager_id);
+#else	MACH_VM
 		s = splimp();
 		for (i = 0; i < count; i += CLSIZE)
 			if (mfind(dev, bn + i))
 				munhash(dev, bn + i);
 		splx(s);
+#endif	MACH_VM
 		bp = bread(dev, bn, size);
 		if (bp->b_flags & B_ERROR) {
 			u.u_error = EIO;
@@ -439,7 +657,7 @@ itrunc(oip, length)
 			brelse(bp);
 			return;
 		}
-		bzero(bp->b_un.b_addr + offset, (unsigned)(size - offset));
+		bzero(bp->b_un.b_addr + offset, size - offset);
 		bdwrite(bp);
 	}
 	/*
@@ -485,7 +703,7 @@ itrunc(oip, length)
 	 * All whole direct blocks or frags.
 	 */
 	for (i = NDADDR - 1; i > lastblock; i--) {
-		register off_t bsize;
+		register int bsize;
 
 		bn = ip->i_db[i];
 		if (bn == 0)
@@ -503,8 +721,12 @@ itrunc(oip, length)
 	 * last direct block; release any frags.
 	 */
 	bn = ip->i_db[lastblock];
+#if	CS_OLDFS
+	if (bn != 0 && !isoldfs(fs)) {
+#else	CS_OLDFS
 	if (bn != 0) {
-		off_t oldspace, newspace;
+#endif	CS_OLDFS
+		int oldspace, newspace;
 
 		/*
 		 * Calculate amount of space we're giving
@@ -609,7 +831,7 @@ indirtrunc(ip, bn, lastbn, level)
 		if (level > SINGLE)
 			blocksreleased +=
 			    indirtrunc(ip, nb, (daddr_t)-1, level - 1);
-		free(ip, nb, (off_t)fs->fs_bsize);
+		free(ip, nb, (int)fs->fs_bsize);
 		blocksreleased += nblocks;
 	}
 

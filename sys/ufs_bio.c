@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ufs_bio.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ufs_bio.c	6.7 (Berkeley) 9/17/85
  */
 
 #include "../machine/pte.h"
@@ -35,7 +62,7 @@ bread(dev, blkno, size)
 	bp = getblk(dev, blkno, size);
 	if (bp->b_flags&B_DONE) {
 		trace(TR_BREADHIT, pack(dev, size), blkno);
-		return (bp);
+		return(bp);
 	}
 	bp->b_flags |= B_READ;
 	if (bp->b_bcount > bp->b_bufsize)
@@ -44,7 +71,7 @@ bread(dev, blkno, size)
 	trace(TR_BREADMISS, pack(dev, size), blkno);
 	u.u_ru.ru_inblock++;		/* pay for read */
 	biowait(bp);
-	return (bp);
+	return(bp);
 }
 
 /*
@@ -202,7 +229,7 @@ brelse(bp)
 	/*
 	 * Stick the buffer back on a free list.
 	 */
-	s = splbio();
+	s = spl6();
 	if (bp->b_bufsize <= 0) {
 		/* block has no buffer ... put at front of unused buffer list */
 		flist = &bfreelist[BQ_EMPTY];
@@ -273,8 +300,6 @@ getblk(dev, blkno, size)
 	register struct buf *bp, *dp;
 	int s;
 
-	if (size > MAXBSIZE)
-		panic("getblk: size too big");
 	/*
 	 * To prevent overflow of 32-bit ints when converting block
 	 * numbers to byte offsets, blknos > 2^32 / DEV_BSIZE are set
@@ -296,7 +321,7 @@ loop:
 		if (bp->b_blkno != blkno || bp->b_dev != dev ||
 		    bp->b_flags&B_INVAL)
 			continue;
-		s = splbio();
+		s = spl6();
 		if (bp->b_flags&B_BUSY) {
 			bp->b_flags |= B_WANTED;
 			sleep((caddr_t)bp, PRIBIO+1);
@@ -308,7 +333,7 @@ loop:
 		if (bp->b_bcount != size && brealloc(bp, size) == 0)
 			goto loop;
 		bp->b_flags |= B_CACHE;
-		return (bp);
+		return(bp);
 	}
 	if (major(dev) >= nblkdev)
 		panic("blkdev");
@@ -321,7 +346,7 @@ loop:
 	bp->b_error = 0;
 	if (brealloc(bp, size) == 0)
 		goto loop;
-	return (bp);
+	return(bp);
 }
 
 /*
@@ -334,8 +359,6 @@ geteblk(size)
 {
 	register struct buf *bp, *flist;
 
-	if (size > MAXBSIZE)
-		panic("geteblk: size too big");
 loop:
 	bp = getnewbuf();
 	bp->b_flags |= B_INVAL;
@@ -347,7 +370,7 @@ loop:
 	bp->b_error = 0;
 	if (brealloc(bp, size) == 0)
 		goto loop;
-	return (bp);
+	return(bp);
 }
 
 /*
@@ -402,7 +425,7 @@ loop:
 		if (ep->b_bcount == 0 || ep->b_blkno > last ||
 		    ep->b_blkno + btodb(ep->b_bcount) <= start)
 			continue;
-		s = splbio();
+		s = spl6();
 		if (ep->b_flags&B_BUSY) {
 			ep->b_flags |= B_WANTED;
 			sleep((caddr_t)ep, PRIBIO+1);
@@ -433,7 +456,7 @@ getnewbuf()
 	int s;
 
 loop:
-	s = splbio();
+	s = spl6();
 	for (dp = &bfreelist[BQ_AGE]; dp > bfreelist; dp--)
 		if (dp->av_forw != dp)
 			break;
@@ -465,7 +488,7 @@ biowait(bp)
 {
 	int s;
 
-	s = splbio();
+	s = spl6();
 	while ((bp->b_flags&B_DONE)==0)
 		sleep((caddr_t)bp, PRIBIO);
 	splx(s);
@@ -523,7 +546,7 @@ loop:
 		if (ep->b_bcount == 0 || ep->b_blkno > last ||
 		    ep->b_blkno + btodb(ep->b_bcount) <= start)
 			continue;
-		s = splbio();
+		s = spl6();
 		if (ep->b_flags&B_BUSY) {
 			ep->b_flags |= B_WANTED;
 			sleep((caddr_t)ep, PRIBIO+1);
@@ -554,7 +577,7 @@ bflush(dev)
 	int s;
 
 loop:
-	s = splbio();
+	s = spl6();
 	for (flist = bfreelist; flist < &bfreelist[BQ_EMPTY]; flist++)
 	for (bp = flist->av_forw; bp != flist; bp = bp->av_forw) {
 		if ((bp->b_flags & B_DELWRI) == 0)

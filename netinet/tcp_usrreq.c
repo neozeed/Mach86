@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)tcp_usrreq.c	7.1 (Berkeley) 6/5/86
+ *	@(#)tcp_usrreq.c	6.7 (Berkeley) 9/16/85
  */
 
 #include "param.h"
@@ -248,7 +275,6 @@ tcp_usrreq(so, req, m, nam, rights)
 	case PRU_RCVOOB:
 		if ((so->so_oobmark == 0 &&
 		    (so->so_state & SS_RCVATMARK) == 0) ||
-		    so->so_options & SO_OOBINLINE ||
 		    tp->t_oobflags & TCPOOB_HADDATA) {
 			error = EINVAL;
 			break;
@@ -269,16 +295,8 @@ tcp_usrreq(so, req, m, nam, rights)
 			error = ENOBUFS;
 			break;
 		}
-		/*
-		 * According to RFC961 (Assigned Protocols),
-		 * the urgent pointer points to the last octet
-		 * of urgent data.  We continue, however,
-		 * to consider it to indicate the first octet
-		 * of data past the urgent section.
-		 * Otherwise, snd_up should be one lower.
-		 */
+		tp->snd_up = tp->snd_una + so->so_snd.sb_cc + 1;
 		sbappend(&so->so_snd, m);
-		tp->snd_up = tp->snd_una + so->so_snd.sb_cc;
 		tp->t_force = 1;
 		error = tcp_output(tp);
 		tp->t_force = 0;
@@ -310,61 +328,16 @@ tcp_usrreq(so, req, m, nam, rights)
 	return (error);
 }
 
-tcp_ctloutput(op, so, level, optname, mp)
+tcp_ctloutput(op, so, level, optname, m)
 	int op;
 	struct socket *so;
 	int level, optname;
-	struct mbuf **mp;
+	struct mbuf **m;
 {
-	int error = 0;
-	struct inpcb *inp = sotoinpcb(so);
-	register struct tcpcb *tp = intotcpcb(inp);
-	register struct mbuf *m;
-
 	if (level != IPPROTO_TCP)
-		return (ip_ctloutput(op, so, level, optname, mp));
-
-	switch (op) {
-
-	case PRCO_SETOPT:
-		m = *mp;
-		switch (optname) {
-
-		case TCP_NODELAY:
-			if (m == NULL || m->m_len < sizeof (int))
-				error = EINVAL;
-			else if (*mtod(m, int *))
-				tp->t_flags |= TF_NODELAY;
-			else
-				tp->t_flags &= ~TF_NODELAY;
-			break;
-
-		case TCP_MAXSEG:	/* not yet */
-		default:
-			error = EINVAL;
-			break;
-		}
-		(void)m_free(m);
-		break;
-
-	case PRCO_GETOPT:
-		*mp = m = m_get(M_WAIT, MT_SOOPTS);
-		m->m_len = sizeof(int);
-
-		switch (optname) {
-		case TCP_NODELAY:
-			*mtod(m, int *) = tp->t_flags & TF_NODELAY;
-			break;
-		case TCP_MAXSEG:
-			*mtod(m, int *) = tp->t_maxseg;
-			break;
-		default:
-			error = EINVAL;
-			break;
-		}
-		break;
-	}
-	return (error);
+		return (ip_ctloutput(op, so, level, optname, m));
+	/* INCOMPLETE */
+	return (0);
 }
 
 int	tcp_sendspace = 1024*4;

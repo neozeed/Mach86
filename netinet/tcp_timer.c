@@ -1,10 +1,54 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)tcp_timer.c	7.1 (Berkeley) 6/5/86
+ *	@(#)tcp_timer.c	6.8 (Berkeley) 9/16/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 05-Oct-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	Added inactivity time-out check in tcp_timers() in the absence of
+ *	any keep-alive action.
+ *	[v1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_tcp.h"
+#endif	CMU
 
 #include "param.h"
 #include "systm.h"
@@ -92,10 +136,6 @@ tpgone:
 		;
 	}
 	tcp_iss += TCP_ISSINCR/PR_SLOWHZ;		/* increment iss */
-#ifdef TCP_COMPAT_42
-	if ((int)tcp_iss < 0)
-		tcp_iss = 0;				/* XXX */
-#endif
 	splx(s);
 }
 
@@ -111,8 +151,9 @@ tcp_canceltimers(tp)
 		tp->t_timer[i] = 0;
 }
 
-int	tcp_backoff[TCP_MAXRXTSHIFT+1] =
-    { 1, 2, 4, 6, 8, 10, 15, 20, 30, 30, 30, 30, 30 };
+float	tcp_backoff[TCP_MAXRXTSHIFT] =
+    { 1.0, 1.2, 1.4, 1.7, 2.0, 3.0, 5.0, 8.0, 16.0, 32.0, 32.0, 32.0 };
+int	tcpexprexmtbackoff = 0;
 /*
  * TCP timer processing.
  */
@@ -121,7 +162,6 @@ tcp_timers(tp, timer)
 	register struct tcpcb *tp;
 	int timer;
 {
-	register int rexmt;
 
 	switch (timer) {
 
@@ -150,20 +190,24 @@ tcp_timers(tp, timer)
 			tp = tcp_drop(tp, ETIMEDOUT);
 			break;
 		}
-		if (tp->t_srtt == 0)
-			rexmt = tcp_beta * TCPTV_SRTTDFLT;
-		else
-			rexmt = (int)(tcp_beta * tp->t_srtt);
-		rexmt *= tcp_backoff[tp->t_rxtshift - 1];
-		TCPT_RANGESET(tp->t_timer[TCPT_REXMT], rexmt,
-			    TCPTV_MIN, TCPTV_MAX);
 		/*
 		 * If losing, let the lower level know
 		 * and try for a better route.
 		 */
-		if (tp->t_rxtshift >= TCP_MAXRXTSHIFT / 4 ||
-		    rexmt >= 10 * PR_SLOWHZ)
-			in_losing(tp->t_inpcb);
+		if (tp->t_rxtshift > TCP_MAXRXTSHIFT / 3)
+			in_rtchange(tp->t_inpcb);
+		TCPT_RANGESET(tp->t_timer[TCPT_REXMT],
+		    (int)tp->t_srtt, TCPTV_MIN, TCPTV_MAX);
+		if (tcpexprexmtbackoff) {
+			TCPT_RANGESET(tp->t_timer[TCPT_REXMT],
+			    tp->t_timer[TCPT_REXMT] << tp->t_rxtshift,
+			    TCPTV_MIN, TCPTV_MAX);
+		} else {
+			TCPT_RANGESET(tp->t_timer[TCPT_REXMT],
+			    tp->t_timer[TCPT_REXMT] *
+			        tcp_backoff[tp->t_rxtshift - 1],
+			    TCPTV_MIN, TCPTV_MAX);
+		}
 		tp->snd_nxt = tp->snd_una;
 		/*
 		 * If timing a segment in this window,
@@ -193,8 +237,7 @@ tcp_timers(tp, timer)
 	case TCPT_KEEP:
 		if (tp->t_state < TCPS_ESTABLISHED)
 			goto dropit;
-		if (tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE &&
-		    tp->t_state <= TCPS_CLOSE_WAIT) {
+		if (tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE) {
 		    	if (tp->t_idle >= TCPTV_MAXIDLE)
 				goto dropit;
 			/*
@@ -209,7 +252,24 @@ tcp_timers(tp, timer)
 			 */
 			tcp_respond(tp,
 			    tp->t_template, tp->rcv_nxt-1, tp->snd_una-1, 0);
-		}
+		} else
+#if	CS_TCP
+			/*
+			 *  If we aren't doing the (questionable) keep-alive
+			 *  hack, we can use the more reasonable inactivity
+			 *  time-out.  This value is currently set only by the
+			 *  BBN emulation code.  It would probably be useful to
+			 *  add it to the standard network interface as well by
+			 *  implementing it as a protocol specific option.
+			 */
+			if (tp->t_noact)
+			{
+				if (tp->t_idle >= tp->t_noact)
+					goto dropit;
+			}
+			else
+#endif	CS_TCP
+			tp->t_idle = 0;
 		tp->t_timer[TCPT_KEEP] = TCPTV_KEEP;
 		break;
 	dropit:

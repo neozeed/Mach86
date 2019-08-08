@@ -1,10 +1,71 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)subr_rmap.c	7.1 (Berkeley) 6/5/86
+ *	@(#)subr_rmap.c	6.3 (Berkeley) 6/8/85
  */
+#if	CMU
+
+/*
+ **************************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 22-Feb-85  Robert V Baron (rvb) at Carnegie-Mellon University
+ *	No change this time, but we have had another problem like  5-Oct.
+ *	The problem is we are doing an rmfree to add stuff to the user
+ *	process shared memory map.  We init the map so the first cell says
+ *	0,0, the ensuing cells contain non zero junk if the map was freed by
+ *	shmpfree.  Adding a new element clobbers the zero cell, but MUST lob
+ *	a zero into the succeeding cell. Thus the whole map is restored to
+ *	some bogus state.  I am fixing this for now by making shmpfree zero
+ *	the map.  I think the problem should be solved here instead.
+ *
+ *  5-Oct-84  Robert V Baron (rvb) at Carnegie-Mellon University
+ *	Change the sentinel check when merging an entry with the next to
+ *	check the size == 0 rather than the addr == 0
+ *
+ * 18-Sep-84  Robert V Baron (rvb) at Carnegie-Mellon University
+ *	On a badrmfree, print name and address of map
+ *
+ * 29-Aug-84  Robert V Baron (rvb) at Carnegie-Mellon University
+ *	added rmprint for printing a resource map
+ **************************************************************************
+ */
+
+#include "cs_generic.h"
+#include "cs_bugfix.h"
+#include "mach_vm.h"
+#endif	CMU
 
 #include "param.h"
 #include "systm.h"
@@ -15,6 +76,10 @@
 #include "text.h"
 #include "kernel.h"
 
+#if	MACH_VM
+#include "../h/kern_return.h"
+#include "../vm/vm_map.h"
+#endif	MACH_VM
 /*
  * Resource map handling routines.
  *
@@ -56,6 +121,12 @@ rminit(mp, size, addr, name, mapsize)
 	register struct mapent *ep = (struct mapent *)(mp+1);
 
 	mp->m_name = name;
+#if	MACH_VM
+	if (mp != swapmap) {
+		mp->m_limit = (struct mapent *) vm_map_create(0, addr, addr+size, FALSE);
+		return;
+	}
+#endif	MACH_VM
 /* N.B.: WE ASSUME HERE THAT sizeof (struct map) == sizeof (struct mapent) */
 	/*
 	 * One of the mapsize slots is taken by the map structure,
@@ -97,6 +168,20 @@ rmalloc(mp, size)
 
 	if (size <= 0 || mp == swapmap && size > dmmax)
 		panic("rmalloc");
+#if	MACH_VM
+	if (mp != swapmap) {
+		vm_map_t	map;
+		kern_return_t	retval;
+		long		my_addr;
+
+		map = (vm_map_t) mp->m_limit;
+		my_addr = map->min_offset;
+		retval = vm_map_find(map, 0, 0, &my_addr, size, TRUE);
+		if (retval != KERN_SUCCESS)
+			return(0);
+		return(my_addr);
+	}
+#endif	MACH_VM
 	/*
 	 * Search for a piece of the resource map which has enough
 	 * free space to accomodate the request.
@@ -161,6 +246,15 @@ rmfree(mp, size, addr)
 	 */
 	if (addr <= 0 || size <= 0)
 		goto badrmfree;
+#if	MACH_VM
+	if (mp != swapmap) {
+		vm_map_t	map;
+
+		map = (vm_map_t) mp->m_limit;
+		(void) vm_map_remove(map, addr, addr+size);
+		goto done;
+	}
+#endif	MACH_VM
 	/*
 	 * Locate the piece of the map which starts after the
 	 * returned space (or the end of the map).
@@ -187,7 +281,11 @@ rmfree(mp, size, addr)
 		 * the right now, compress it in also,
 		 * by shifting the remaining pieces of the map over.
 		 */
+#if	CS_BUGFIX
+		if (bp->m_size && addr+size >= bp->m_addr) {
+#else	CS_BUGFIX
 		if (bp->m_addr && addr+size >= bp->m_addr) {
+#endif	CS_BUGFIX
 			if (addr+size > bp->m_addr)
 				goto badrmfree;
 			(bp-1)->m_size += bp->m_size;
@@ -247,12 +345,23 @@ done:
 	/*
 	 * THIS IS RIDICULOUS... IT DOESN'T BELONG HERE!
 	 */
+#if	MACH_VM
+#else	MACH_VM
 	if ((mp == kernelmap) && kmapwnt) {
 		kmapwnt = 0;
 		wakeup((caddr_t)kernelmap);
 	}
+#endif	MACH_VM
 	return;
 badrmfree:
+#if	CS_GENERIC
+#if	MACH_VM
+	vm_map_print((vm_map_t) mp->m_limit);
+#else	MACH_VM
+	printf("map \"%s\" @%x Limit %x... ",
+		mp->m_name, mp, mp->m_limit);
+#endif	MACH_VM
+#endif	CS_GENERIC
 	panic("bad rmfree");
 }
 
@@ -278,6 +387,18 @@ rmget(mp, size, addr)
 		panic("rmget");
 	if (mp == swapmap)
 		return (0);
+#if	MACH_VM
+	if (mp != swapmap) {
+		vm_map_t	map;
+		kern_return_t	retval;
+
+		map = (vm_map_t) mp->m_limit;
+		retval = vm_map_find(map, 0, 0, &addr, size, FALSE);
+		if (retval != KERN_SUCCESS)
+			return(0);
+		return(addr);
+	}
+#endif	MACH_VM
 	/*
 	 * Look for a map segment containing the requested address.
 	 * If none found, return failure.
@@ -326,7 +447,7 @@ rmget(mp, size, addr)
 			 */
 			for (bp2=bp; bp2->m_size; bp2++)
 				;
-			if (bp2 + 1 >= mp->m_limit)
+			if (bp2 == mp->m_limit)
 				return (0);
 			while (bp2 > bp) {
 				(bp2+1)->m_addr = bp2->m_addr;
@@ -340,3 +461,20 @@ rmget(mp, size, addr)
 		}
 	return (addr);
 }
+#if	CS_GENERIC
+
+rmprint(rmap)
+	register struct map *rmap;
+{
+	register struct mapent *ep = (struct mapent *) (rmap + 1);
+
+	printf("map \"%s\" @%x limit %x\n",
+		rmap->m_name, rmap, rmap->m_limit);
+
+	for ( ; ep->m_size && ep < rmap->m_limit; ep++)
+		printf("\t%x %x\n", ep->m_addr, ep->m_size);
+
+	if (ep == rmap->m_limit)
+		printf("MAP FULL\n");
+}
+#endif	CS_GENERIC

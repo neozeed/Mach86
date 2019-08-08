@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1984, 1985, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ns.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ns.c	6.4 (Berkeley) 8/9/85
  */
 
 #include "param.h"
@@ -34,13 +61,8 @@ ns_hash(sns, hp)
 {
 	register long hash = 0;
 	register u_short *s =  sns->sns_addr.x_host.s_host;
-	union {
-		union ns_net	net_e;
-		long		long_e;
-	} net;
 
-	net.net_e = sns->sns_addr.x_net;
-	hp->afh_nethash = net.long_e;
+	hp->afh_nethash = ns_netof(sns->sns_addr);
 	hash = *s++; hash <<= 8; hash += *s++; hash <<= 8; hash += *s;
 	hp->afh_hosthash =  hash;
 }
@@ -50,7 +72,7 @@ ns_netmatch(sns1, sns2)
 	struct sockaddr_ns *sns1, *sns2;
 {
 
-	return (ns_neteq(sns1->sns_addr, sns2->sns_addr));
+	return (ns_netof(sns1->sns_addr) == ns_netof(sns2->sns_addr));
 }
 
 /*
@@ -71,7 +93,7 @@ ns_control(so, cmd, data, ifp)
 	/*
 	 * Find address for this interface, if it exists.
 	 */
-	if (ifp == 0)
+	if (ifp==0)
 		return (EADDRNOTAVAIL);
 	for (ia = ns_ifaddr; ia; ia = ia->ia_next)
 		if (ia->ia_ifp == ifp)
@@ -108,8 +130,10 @@ ns_control(so, cmd, data, ifp)
 
 	switch (cmd) {
 
-	case SIOCSIFADDR:
 	case SIOCSIFDSTADDR:
+		return (EOPNOTSUPP);
+
+	case SIOCSIFADDR:
 		if (ia == (struct ns_ifaddr *)0) {
 			m = m_getclr(M_WAIT, MT_IFADDR);
 			if (m == (struct mbuf *)NULL)
@@ -130,27 +154,6 @@ ns_control(so, cmd, data, ifp)
 			ia->ia_ifp = ifp;
 			IA_SNS(ia)->sns_family = AF_NS;
 		}
-	}
-
-	switch (cmd) {
-
-	case SIOCSIFDSTADDR:
-		if ((ifp->if_flags & IFF_POINTOPOINT) == 0)
-			return (EINVAL);
-		if (ia->ia_flags & IFA_ROUTE) {
-			rtinit(&ia->ia_dstaddr, &ia->ia_addr,
-				(int)SIOCDELRT, RTF_HOST);
-			ia->ia_flags &= ~IFA_ROUTE;
-		}
-		if (ifp->if_ioctl) {
-			int error = (*ifp->if_ioctl)(ifp, SIOCSIFDSTADDR, ia);
-			if (error)
-				return (error);
-		}
-		ia->ia_dstaddr = ifr->ifr_dstaddr;
-		return (0);
-
-	case SIOCSIFADDR:
 		return
 		    (ns_ifinit(ifp, ia, (struct sockaddr_ns *)&ifr->ifr_addr));
 
@@ -188,23 +191,22 @@ ns_ifinit(ifp, ia, sns)
 	if (ns_hosteqnh(sns->sns_addr.x_host, ns_broadhost)) {
 		ns_thishost = ns_zerohost;
 		splx(s);
-		return (0);
+		return(EINVAL);
 	}
 
 	/*
 	 * Delete any previous route for an old address.
 	 */
+
 	bzero((caddr_t)&netaddr, sizeof (netaddr));
 	netaddr.sns_family = AF_NS;
 	netaddr.sns_addr.x_host = ns_broadhost;
 	netaddr.sns_addr.x_net = ia->ia_net;
 	if (ia->ia_flags & IFA_ROUTE) {
 		if ((ifp->if_flags & IFF_POINTOPOINT) == 0) {
-		    rtinit((struct sockaddr *)&netaddr, &ia->ia_addr,
-				    (int)SIOCDELRT, 0);
+		    rtinit((struct sockaddr *)&netaddr, &ia->ia_addr, -1);
 		} else
-		    rtinit(&ia->ia_dstaddr, &ia->ia_addr,
-				    (int)SIOCDELRT, RTF_HOST);
+		    rtinit((struct sockaddr *)&ia->ia_dstaddr, &ia->ia_addr, -1);
 	}
 
 	/*
@@ -216,12 +218,25 @@ ns_ifinit(ifp, ia, sns)
 	if (ifp->if_flags & IFF_BROADCAST) {
 		ia->ia_broadaddr = * (struct sockaddr *) &netaddr;
 	}
-
+	/*
+	 * Point to point links are a little touchier --
+	 * We have to have an address of our own first,
+	 * and will use the supplied address as that of the other end.
+	 */
+	if (ifp->if_flags & IFF_POINTOPOINT) {
+		struct sockaddr_ns *sns2 = IA_SNS(ia);
+		if (ns_hosteqnh(ns_zerohost,ns_thishost))
+			return(EINVAL);
+		ia->ia_dstaddr = ia->ia_addr;
+		sns2->sns_addr.x_host = ns_thishost;
+		sns->sns_addr.x_host = ns_thishost;
+	}
 	/*
 	 * Give the interface a chance to initialize
 	 * if this is its first address,
 	 * and to validate the address if necessary.
 	 */
+
 	if (ns_hosteqnh(ns_thishost, ns_zerohost)) {
 		if (ifp->if_ioctl &&
 		     (error = (*ifp->if_ioctl)(ifp, SIOCSIFADDR, ia))) {
@@ -237,55 +252,39 @@ ns_ifinit(ifp, ia, sns)
 			splx(s);
 			return (error);
 		}
-		if (!ns_hosteqnh(ns_thishost,*h)) {
+		if(!ns_hosteqnh(ns_thishost,*h)) {
 			splx(s);
 			return (EINVAL);
 		}
 	} else {
 		splx(s);
-		return (EINVAL);
+		return(EINVAL);
 	}
-
 	/*
 	 * Add route for the network.
 	 */
-	if (ifp->if_flags & IFF_POINTOPOINT)
-		rtinit(&ia->ia_dstaddr, &ia->ia_addr, (int)SIOCADDRT,
+	if ((ifp->if_flags & IFF_POINTOPOINT) == 0) {
+		rtinit((struct sockaddr *)&netaddr, &ia->ia_addr, RTF_UP);
+	} else
+		rtinit((struct sockaddr *)&ia->ia_dstaddr, &ia->ia_addr,
 			RTF_HOST|RTF_UP);
-	else
-		rtinit(&ia->ia_broadaddr, &ia->ia_addr, (int)SIOCADDRT,
-			RTF_UP);
 	ia->ia_flags |= IFA_ROUTE;
-	return (0);
+	return(0);
 }
 
 /*
  * Return address info for specified internet network.
  */
 struct ns_ifaddr *
-ns_iaonnetof(dst)
-	register struct ns_addr *dst;
+ns_iaonnetof(net)
+	union ns_net net;
 {
 	register struct ns_ifaddr *ia;
-	register struct ns_addr *compare;
-	register struct ifnet *ifp;
-	struct ns_ifaddr *ia_maybe = 0;
-	union ns_net net = dst->x_net;
 
-	for (ia = ns_ifaddr; ia; ia = ia->ia_next) {
-		if (ifp = ia->ia_ifp) {
-			if (ifp->if_flags & IFF_POINTOPOINT) {
-				compare = &satons_addr(ia->ia_dstaddr);
-				if (ns_hosteq(*dst, *compare))
-					return (ia);
-				if (ns_neteqnn(net, ia->ia_net))
-					ia_maybe = ia;
-			} else {
-				if (ns_neteqnn(net, ia->ia_net))
-					return (ia);
-			}
-		}
-	}
-	return (ia_maybe);
+#define	NtoL(x)	(*(long *)(&(x)))
+	for (ia = ns_ifaddr; ia; ia = ia->ia_next)
+		if (NtoL(ia->ia_net) == NtoL(net))
+			return (ia);
+	return ((struct ns_ifaddr *)0);
 }
 #endif

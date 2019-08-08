@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1984, 1985, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ns.h	7.1 (Berkeley) 6/5/86
+ *	@(#)ns.h	6.7 (Berkeley) 9/6/85
  */
 
 /*
@@ -69,11 +96,6 @@ union ns_net {
 	u_short	s_net[2];
 };
 
-union ns_net_u {
-	union ns_net	net_e;
-	u_long		long_e;
-};
-
 struct ns_addr {
 	union ns_net	x_net;
 	union ns_host	x_host;
@@ -90,12 +112,7 @@ struct sockaddr_ns {
 };
 #define sns_port sns_addr.x_port
 
-#ifdef vax
-#define ns_netof(a) (*(long *) & ((a).x_net)) /* XXX - not needed */
-#endif
-#define ns_neteqnn(a,b) (((a).s_net[0]==(b).s_net[0]) && \
-					((a).s_net[1]==(b).s_net[1]))
-#define ns_neteq(a,b) ns_neteqnn((a).x_net, (b).x_net)
+#define ns_netof(a) (*(long *) & ((a).x_net))
 #define satons_addr(sa)	(((struct sockaddr_ns *)&(sa))->sns_addr)
 #define ns_hosteqnh(s,t) ((s).s_host[0] == (t).s_host[0] && \
 	(s).s_host[1] == (t).s_host[1] && (s).s_host[2] == (t).s_host[2])
@@ -103,7 +120,8 @@ struct sockaddr_ns {
 #define ns_nullhost(x) (((x).x_host.s_host[0]==0) && \
 	((x).x_host.s_host[1]==0) && ((x).x_host.s_host[2]==0))
 
-#if !defined(vax) && !defined(ntohl) && !defined(lint)
+#if !defined(vax)
+#if !defined(INET)
 /*
  * Macros for number representation conversion.
  */
@@ -112,18 +130,12 @@ struct sockaddr_ns {
 #define	htonl(x)	(x)
 #define	htons(x)	(x)
 #endif
-
-#if !defined(ntohl) && (defined(vax) || defined(lint))
-u_short	ntohs(), htons();
-u_long	ntohl(), htonl();
 #endif
 
 #ifdef KERNEL
 extern struct domain nsdomain;
-union ns_host ns_thishost;
-union ns_host ns_zerohost;
-union ns_host ns_broadhost;
-union ns_net ns_zeronet;
-union ns_net ns_broadnet;
+extern union ns_host ns_thishost;
+extern union ns_host ns_zerohost;
+extern union ns_host ns_broadhost;
 u_short ns_cksum();
 #endif

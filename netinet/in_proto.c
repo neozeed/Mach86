@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)in_proto.c	7.1 (Berkeley) 6/5/86
+ *	@(#)in_proto.c	6.11 (Berkeley) 9/16/85
  */
 
 #include "param.h"
@@ -27,7 +54,7 @@ int	udp_init();
 int	tcp_input(),tcp_ctlinput();
 int	tcp_usrreq(),tcp_ctloutput();
 int	tcp_init(),tcp_fasttimo(),tcp_slowtimo(),tcp_drain();
-int	rip_input(),rip_output(),rip_ctloutput();
+int	rip_input(),rip_output();
 extern	int raw_usrreq();
 /*
  * IMP protocol family: raw interface.
@@ -40,7 +67,7 @@ int	rimp_output(), hostslowtimo();
 #endif
 
 #ifdef NSIP
-int	idpip_input(), nsip_ctlinput();
+int	idpip_input();
 #endif
 
 extern	struct domain inetdomain;
@@ -62,25 +89,25 @@ struct protosw inetsw[] = {
   tcp_init,	tcp_fasttimo,	tcp_slowtimo,	tcp_drain,
 },
 { SOCK_RAW,	&inetdomain,	IPPROTO_RAW,	PR_ATOMIC|PR_ADDR,
-  rip_input,	rip_output,	0,		rip_ctloutput,
+  rip_input,	rip_output,	0,		0,
   raw_usrreq,
   0,		0,		0,		0,
 },
 { SOCK_RAW,	&inetdomain,	IPPROTO_ICMP,	PR_ATOMIC|PR_ADDR,
-  icmp_input,	rip_output,	0,		rip_ctloutput,
+  icmp_input,	rip_output,	0,		0,
   raw_usrreq,
   0,		0,		0,		0,
 },
 #ifdef NSIP
 { SOCK_RAW,	&inetdomain,	IPPROTO_IDP,	PR_ATOMIC|PR_ADDR,
-  idpip_input,	rip_output,	nsip_ctlinput,	0,
+  idpip_input,	rip_output,	0,		0,
   raw_usrreq,
   0,		0,		0,		0,
 },
 #endif
 	/* raw wildcard */
 { SOCK_RAW,	&inetdomain,	0,		PR_ATOMIC|PR_ADDR,
-  rip_input,	rip_output,	0,		rip_ctloutput,
+  rip_input,	rip_output,	0,		0,
   raw_usrreq,
   0,		0,		0,		0,
 },
@@ -123,5 +150,5 @@ struct protosw hysw[] = {
 };
 
 struct domain hydomain =
-    { AF_HYLINK, "hy", 0, 0, 0, hysw, &hysw[sizeof (hysw)/sizeof(hysw[0])] };
+    { AF_HYLINK, "hy", hysw, &hysw[sizeof (hysw)/sizeof(hysw[0])] };
 #endif

@@ -1,10 +1,72 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)tty.c	7.1 (Berkeley) 6/5/86
+ *	@(#)tty.c	6.21 (Berkeley) 8/22/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 28-Jun-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_TTY:  Fix ttwrite() to avoid dead-lock when output
+ *	routine (such as in the QVSS driver) completely drains the
+ *	output queue (below the high water mark) before it returns.
+ *	[V1(1)]
+ *
+ * 16-May-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	Upgraded from 4.1BSD.  Carried over changes below.
+ *	CS_COMPAT: retain MPX hooks and old LINTRUP bit behavior for
+ *	now.
+ *	[V1(1)]
+ *
+ * 10-Nov-84  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_TTY:  Changed not to echo any control characters
+ *	rather than just the escape character (fix courtesy of Brad
+ *	White) (V3.07l).
+ *
+ * 28-Mar-83  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_TTYLOC:  Added TIOCGLOC call to return terminal location
+ *	information (V3.06h).
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_compat.h"
+#include "cs_tty.h"
+#include "cs_ttyloc.h"
+#endif	CMU
 
 #include "../machine/reg.h"
 
@@ -19,9 +81,12 @@
 #include "file.h"
 #include "conf.h"
 #include "buf.h"
-#include "dk.h"
+#include "../h/dk.h"
 #include "uio.h"
 #include "kernel.h"
+#if	CS_COMPAT
+#include "mx.h"
+#endif	CS_COMPAT
 
 /*
  * Table giving parity for characters and indicating
@@ -132,7 +197,7 @@ ttywait(tp)
 	register int s = spltty();
 
 	while ((tp->t_outq.c_cc || tp->t_state&TS_BUSY) &&
-	    tp->t_state&TS_CARR_ON) {
+	    tp->t_state&TS_CARR_ON && tp->t_oproc) {	/* kludge for pty */
 		(*tp->t_oproc)(tp);
 		tp->t_state |= TS_ASLEEP;
 		sleep((caddr_t)&tp->t_outq, TTOPRI);
@@ -277,6 +342,14 @@ ttioctl(tp, com, data, flag)
 	 * Process the ioctl.
 	 */
 	switch (com) {
+#if	CS_TTYLOC
+	/* get terminal location */
+	case TIOCGLOC:
+	{
+		bcopy((caddr_t)&(tp->t_ttyloc), data, sizeof(tp->t_ttyloc));
+		break;
+	}
+#endif	CS_TTYLOC
 
 	/* get discipline number */
 	case TIOCGETD:
@@ -290,18 +363,19 @@ ttioctl(tp, com, data, flag)
 
 		if ((unsigned) t >= nldisp)
 			return (ENXIO);
-		if (t != tp->t_line) {
-			s = spltty();
+		s = spltty();
+		if (tp->t_line)
 			(*linesw[tp->t_line].l_close)(tp);
+		if (t)
 			error = (*linesw[t].l_open)(dev, tp);
-			if (error) {
+		if (error) {
+			if (tp->t_line)
 				(void) (*linesw[tp->t_line].l_open)(dev, tp);
-				splx(s);
-				return (error);
-			}
-			tp->t_line = t;
 			splx(s);
+			return (error);
 		}
+		tp->t_line = t;
+		splx(s);
 		break;
 	}
 
@@ -560,7 +634,6 @@ win:
 }
 
 /*
- * Initial open of tty, or (re)entry to line discipline.
  * Establish a process group for distribution of
  * quits and interrupts from the tty.
  */
@@ -590,85 +663,20 @@ ttyopen(dev, tp)
 }
 
 /*
- * "close" a line discipline
- */
-ttylclose(tp)
-	register struct tty *tp;
-{
-
-	ttywflush(tp);
-	tp->t_line = 0;
-}
-
-/*
  * clean tp on last close
  */
 ttyclose(tp)
 	register struct tty *tp;
 {
 
-	ttyflush(tp, FREAD|FWRITE);
-	tp->t_pgrp = 0;
-	tp->t_state = 0;
-}
-
-/*
- * Handle modem control transition on a tty.
- * Flag indicates new state of carrier.
- * Returns 0 if the line should be turned off, otherwise 1.
- */
-ttymodem(tp, flag)
-	register struct tty *tp;
-{
-
-	if ((tp->t_state&TS_WOPEN) == 0 && (tp->t_flags & MDMBUF)) {
-		/*
-		 * MDMBUF: do flow control according to carrier flag
-		 */
-		if (flag) {
-			tp->t_state &= ~TS_TTSTOP;
-			ttstart(tp);
-		} else if ((tp->t_state&TS_TTSTOP) == 0) {
-			tp->t_state |= TS_TTSTOP;
-			(*cdevsw[major(tp->t_dev)].d_stop)(tp, 0);
-		}
-	} else if (flag == 0) {
-		/*
-		 * Lost carrier.
-		 */
-		tp->t_state &= ~TS_CARR_ON;
-		if (tp->t_state & TS_ISOPEN) {
-			if ((tp->t_flags & NOHANG) == 0) {
-				gsignal(tp->t_pgrp, SIGHUP);
-				gsignal(tp->t_pgrp, SIGCONT);
-				ttyflush(tp, FREAD|FWRITE);
-				return (0);
-			}
-		}
-	} else {
-		/*
-		 * Carrier now on.
-		 */
-		tp->t_state |= TS_CARR_ON;
-		wakeup((caddr_t)&tp->t_rawq);
+	if (tp->t_line) {
+		ttywflush(tp);
+		tp->t_line = 0;
+		return;
 	}
-	return (1);
-}
-
-/*
- * Default modem control routine (for other line disciplines).
- * Return argument flag, to turn off device on carrier drop.
- */
-nullmodem(tp, flag)
-	register struct tty *tp;
-	int flag;
-{
-	
-	if (flag)
-		tp->t_state |= TS_CARR_ON;
-	else
-		tp->t_state &= ~TS_CARR_ON;
-	return (flag);
+	tp->t_pgrp = 0;
+	ttywflush(tp);
+	tp->t_state = 0;
 }
 
 /*
@@ -778,6 +786,10 @@ ttyinput(c, tp)
 			if ((t_flags&NOFLSH) == 0)
 				ttyflush(tp, FREAD);
 			ttyecho(c, tp);
+#if	CS_COMPAT
+			if (tp->t_chan)
+				scontrol(tp->t_chan, M_SIG, SIGTSTP);
+#endif	CS_COMPAT
 			gsignal(tp->t_pgrp, SIGTSTP);
 			goto endcase;
 		}
@@ -806,6 +818,10 @@ ttyinput(c, tp)
 		if ((t_flags&NOFLSH) == 0)
 			ttyflush(tp, FREAD|FWRITE);
 		ttyecho(c, tp);
+#if	CS_COMPAT
+		if (tp->t_chan)
+			scontrol(tp->t_chan, M_SIG, c == tp->t_intrc ? SIGINT : SIGQUIT);
+#endif	CS_COMPAT
 		gsignal(tp->t_pgrp, c == tp->t_intrc ? SIGINT : SIGQUIT);
 		goto endcase;
 	}
@@ -1066,11 +1082,9 @@ ttyoutput(c, tp)
 	case NEWLINE:
 		ctype = (tp->t_flags >> 8) & 03;
 		if (ctype == 1) { /* tty 37 */
-			if (*colp > 0) {
-				c = (((unsigned)*colp) >> 4) + 3;
-				if ((unsigned)c > 6)
-					c = 6;
-			}
+			if (*colp > 0)
+				c = max((((unsigned)*colp) >> 4) + 3,
+				    (unsigned)6);
 		} else if (ctype == 2) /* vt05 */
 			c = mstohz(100);
 		*colp = 0;
@@ -1164,6 +1178,12 @@ loop:
 				splx(s);
 				return (EWOULDBLOCK);
 			}
+#if	CS_COMPAT
+			if (tp->t_chan && getf(u.u_ap[0])->f_flag&FMP) {
+				splx(s);
+				return (0);
+			}
+#endif	CS_COMPAT
 			sleep((caddr_t)&tp->t_rawq, TTIPRI);
 			splx(s);
 			goto loop;
@@ -1191,6 +1211,12 @@ loop:
 			splx(s);
 			return (EWOULDBLOCK);
 		}
+#if	CS_COMPAT
+		if (tp->t_chan && getf(u.u_ap[0])->f_flag&FMP) {
+			splx(s);
+			return (0);
+		}
+#endif	CS_COMPAT
 		sleep((caddr_t)&tp->t_rawq, TTIPRI);
 		splx(s);
 		goto loop;
@@ -1249,34 +1275,6 @@ checktandem:
 			ttstart(tp);
 		}
 	return (error);
-}
-
-/*
- * Check the output queue on tp for space for a kernel message
- * (from uprintf/tprintf).  Allow some space over the normal
- * hiwater mark so we don't lose messages due to normal flow
- * control, but don't let the tty run amok.
- */
-ttycheckoutq(tp, wait)
-	register struct tty *tp;
-	int wait;
-{
-	int hiwat, s;
-
-	hiwat = TTHIWAT(tp);
-	s = spltty();
-	if (tp->t_outq.c_cc > hiwat + 200)
-	    while (tp->t_outq.c_cc > hiwat) {
-		ttstart(tp);
-		if (wait == 0) {
-			splx(s);
-			return (0);
-		}
-		tp->t_state |= TS_ASLEEP;
-		sleep((caddr_t)&tp->t_outq, TTOPRI);
-	}
-	splx(s);
-	return (1);
 }
 
 /*
@@ -1449,18 +1447,44 @@ ovhiwat:
 	 * This can only occur if FLUSHO
 	 * is also set in t_flags.
 	 */
+#if	CS_TTY
+	/*
+	 *  The QVSS driver (for example) completely empties the output queue
+	 *  without bothering with interrupts when the start routine is called.
+	 *  Thus, we need to do this here rather than below so that a return
+	 *  with the high-water mark no longer exceeded will not block the
+	 *  process on an empty output queue.
+	 */
+	ttstart(tp);
+#endif	CS_TTY
 	if (tp->t_outq.c_cc <= hiwat) {
 		splx(s);
 		goto loop;
 	}
+#if	CS_TTY
+	/*
+	 *  Moved above.
+	 */
+#else	CS_TTY
 	ttstart(tp);
+#endif	CS_TTY
 	if (tp->t_state&TS_NBIO) {
 		splx(s);
 		if (uio->uio_resid == cnt)
 			return (EWOULDBLOCK);
+#if	CS_TTY
+		/*  Bug fix  */
+		splx(s);
+#endif	CS_TTY
 		return (0);
 	}
 	tp->t_state |= TS_ASLEEP;
+#if	CS_COMPAT
+	if (tp->t_chan && uio->uio_segflg == 0 && (getf(u.u_ap[0])->f_flag&FMP)) {
+		splx(s);
+		return (0);
+	}
+#endif	CS_COMPAT
 	sleep((caddr_t)&tp->t_outq, TTOPRI);
 	splx(s);
 	goto loop;
@@ -1621,7 +1645,17 @@ ttyecho(c, tp)
 				c += 'A' - 1;
 		}
 	}
+#if	CS_TTY
+	/*
+	 * Do not echo non-printing control characters.  Mainly
+	 * to stop causing special actions on most terminals.
+	 */
+	c &= 0177;
+	if ((040 <= c && c <= 0176) || (07 <= c && c <= 012) || c == 015)
+	    (void) ttyoutput(c, tp);
+#else	CS_TTY
 	(void) ttyoutput(c&0177, tp);
+#endif	CS_TTY
 }
 
 /*
@@ -1657,7 +1691,12 @@ ttwakeup(tp)
 		tp->t_state &= ~TS_RCOLL;
 		tp->t_rsel = 0;
 	}
+#if	CS_COMPAT
+	if (tp->t_chan)
+		(void) sdata(tp->t_chan);
+#else	CS_COMPAT
 	if (tp->t_state & TS_ASYNC)
 		gsignal(tp->t_pgrp, SIGIO); 
+#endif	CS_COMPAT
 	wakeup((caddr_t)&tp->t_rawq);
 }

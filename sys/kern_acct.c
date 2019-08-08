@@ -1,10 +1,61 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)kern_acct.c	7.1 (Berkeley) 6/5/86
+ *	@(#)kern_acct.c	6.8 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 24-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_OLDFS:  Changed to include filsys.h needed by freespace()
+ *	macro.
+ *
+ *  8-May-85  Glenn Marcy (gm0w) at Carnegie-Mellon University
+ *	Upgraded to 4.2BSD.  Carried over changes below [V1(1)].
+ *
+ * 22-Jun-82  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_ACCT:  Adjusted to use account ID instead of group ID in
+ *	record written to accounting file (V3.05a).
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_oldfs.h"
+#include "cs_aid.h"
+#endif	CMU
 
 #include "param.h"
 #include "systm.h"
@@ -15,6 +66,9 @@
 #include "kernel.h"
 #include "acct.h"
 #include "uio.h"
+#if	CS_OLDFS
+#include "filsys.h"
+#endif	CS_OLDFS
 
 /*
  * SHOULD REPLACE THIS WITH A DRIVER THAT CAN BE READ TO SIMPLIFY.
@@ -49,9 +103,9 @@ sysacct()
 		ndp->ni_segflg = UIO_USERSPACE;
 		ndp->ni_dirp = uap->fname;
 		ip = namei(ndp);
-		if (ip == NULL)
+		if(ip == NULL)
 			return;
-		if ((ip->i_mode&IFMT) != IFREG) {
+		if((ip->i_mode & IFMT) != IFREG) {
 			u.u_error = EACCES;
 			iput(ip);
 			return;
@@ -114,7 +168,11 @@ acct()
 	ap->ac_etime = compress(t.tv_sec, t.tv_usec);
 	ap->ac_btime = u.u_start.tv_sec;
 	ap->ac_uid = u.u_ruid;
+#if	CS_AID
+	ap->ac_gid = u.u_aid;
+#else	CS_AID
 	ap->ac_gid = u.u_rgid;
+#endif	CS_AID
 	t = ru->ru_stime;
 	timevaladd(&t, &ru->ru_utime);
 	if (i = t.tv_sec * hz + t.tv_usec / tick)
@@ -122,7 +180,7 @@ acct()
 	else
 		ap->ac_mem = 0;
 	ap->ac_mem >>= CLSIZELOG2;
-	ap->ac_io = compress(ru->ru_inblock + ru->ru_oublock, (long)0);
+	ap->ac_io = compress(ru->ru_inblock + ru->ru_oublock, 0);
 	if (u.u_ttyp)
 		ap->ac_tty = u.u_ttyd;
 	else

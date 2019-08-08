@@ -1,10 +1,59 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)kern_descrip.c	7.1 (Berkeley) 6/5/86
+ *	@(#)kern_descrip.c	6.11 (Berkeley) 6/8/85
  */
+#if	CMU
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 13-Jan-86  Robert V Baron (rvb) at Carnegie-Mellon University
+ *	sensor changes for mll
+ *
+ * 18-Jul-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_RFS:  Added explicit hook in fstat() into remote system
+ *	call handling.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_bugfix.h"
+#include "cs_rfs.h"
+#include "wb_sens.h"
+#endif	CMU
 
 #include "param.h"
 #include "systm.h"
@@ -21,6 +70,9 @@
 
 #include "ioctl.h"
 
+#if	NWB_SENS > 0
+#include "../sensor/kern_sensors.h"
+#endif	NWB_SENS > 0
 /*
  * Descriptor management.
  */
@@ -213,7 +265,7 @@ fsetown(fp, value)
 	if (value > 0) {
 		struct proc *p = pfind(value);
 		if (p == 0)
-			return (ESRCH);
+			return (EINVAL);
 		value = p->p_pgrp;
 	} else
 		value = -value;
@@ -246,7 +298,7 @@ close()
 	while (u.u_lastfile >= 0 && u.u_ofile[u.u_lastfile] == NULL)
 		u.u_lastfile--;
 	*pf = 0;
-	closef(fp);
+ 	closef(fp);
 	/* WHAT IF u.u_error ? */
 }
 
@@ -263,6 +315,19 @@ fstat()
 	GETF(fp, uap->fdes);
 	switch (fp->f_type) {
 
+#if	CS_RFS
+	/*
+	 *  The original code probably should have included fstat() in the file
+	 *  ops structure in which case these explicit hooks could have been
+	 *  avoided but ...
+	 */
+	case DTYPE_RFSINO:
+		u.u_error = rfs_fstat(fp);
+		return;
+	case DTYPE_RFSCTL:
+		u.u_error = rfsC_fstat(fp);
+		return;
+#endif	CS_RFS
 	case DTYPE_INODE:
 		u.u_error = ino_stat((struct inode *)fp->f_data, &ub);
 		break;
@@ -366,6 +431,11 @@ getf(f)
 /*
  * Internal form of close.
  * Decrement reference count on file structure.
+ * If last reference not going away, but no more
+ * references except in message queues, run a
+ * garbage collect.  This would better be done by
+ * forcing a gc() to happen sometime soon, rather
+ * than running one each time.
  */
 closef(fp)
 	register struct file *fp;
@@ -373,8 +443,15 @@ closef(fp)
 
 	if (fp == NULL)
 		return;
+#if	NWB_SENS > 0
+ 	FileClose(((struct inode *)fp->f_data)->i_dev,
+		  ((struct inode *)fp->f_data)->i_number,
+		  ((struct inode *)fp->f_data)->i_size);
+#endif	NWB_SENS > 0
 	if (fp->f_count > 1) {
 		fp->f_count--;
+		if (fp->f_count == fp->f_msgcount)
+			unp_gc();
 		return;
 	}
 	(*fp->f_ops->fo_close)(fp);

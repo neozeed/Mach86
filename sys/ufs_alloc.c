@@ -1,10 +1,67 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)ufs_alloc.c	7.1 (Berkeley) 6/5/86
+ *	@(#)ufs_alloc.c	6.16 (Berkeley) 9/17/85
  */
+#if	CMU
+ 
+/*
+ **********************************************************************
+ * HISTORY
+ * 25-Jan-86  Avadis Tevanian (avie) at Carnegie-Mellon University
+ *	Upgraded to 4.3.
+ *
+ * 13-Jan-86  Robert V Baron (rvb) at Carnegie-Mellon University
+ *	sensor changes for mll
+ *
+ * 03-Aug-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_RPAUSE:  Added fsfull(), fssleep() and fspause() routines
+ *	and changed file system block and inode allocation/free
+ *	routines to handle these resource exhaustion and resumption
+ *	conditions.
+ *	[V1(1)]
+ *
+ * 13-Jun-85  Mike Accetta (mja) at Carnegie-Mellon University
+ *	CS_OLDFS:  Changed to also handle old format file systems.
+ *	[V1(1)]
+ *
+ **********************************************************************
+ */
+ 
+#include "cs_oldfs.h"
+#include "cs_rpause.h"
+#include "wb_sens.h"
+#endif	CMU
+
 
 #include "param.h"
 #include "systm.h"
@@ -17,7 +74,13 @@
 #include "quota.h"
 #include "kernel.h"
 #include "syslog.h"
-#include "cmap.h"
+#if	CS_OLDFS
+#include "filsys.h"
+#endif	CS_OLDFS
+#if	NWB_SENS > 0
+#include "proc.h"
+#include "../sensor/ufs_sensors.h"
+#endif	NWB_SENS > 0
 
 extern u_long		hashalloc();
 extern ino_t		ialloccg();
@@ -60,6 +123,63 @@ alloc(ip, bpref, size)
 	int cg;
 	
 	fs = ip->i_fs;
+#if	CS_OLDFS
+	/*
+ 	 * old format:
+	 *
+	 * alloc will obtain the next available
+	 * free disk block from the free list of
+	 * the specified device.
+	 * The super block has up to NICFREE remembered
+	 * free blocks; the last of these is read to
+	 * obtain NICFREE more . . .
+	 */
+	if (isoldfs(fs))
+	{
+	register struct filsys *fp;
+	
+	fp = fs->fs_oldfs;
+	while (fp->s_flock)
+		sleep((caddr_t)&fp->s_flock, PINOD);
+	do {
+		if (u.u_uid != 0 && fp->s_tfree <= FS_FLOWAT(fs))
+			goto nospace;
+		if (fp->s_nfree <= 0)
+			goto onospace;
+		if (fp->s_nfree > NICFREE) {
+			fserr(fs, "bad free count");
+			goto onospace;
+		}
+		bno = fp->s_free[--fp->s_nfree];
+		if (bno == 0)
+			goto onospace;
+	} while (badblock(fs, bno));
+	if (fp->s_nfree <= 0) {
+		fp->s_flock++;
+		bp = bread(ip->i_dev, fsbtodb(fs, bno), (int)fs->fs_bsize);
+		if ((bp->b_flags&B_ERROR) == 0) {
+			fp->s_nfree = ((FBLKP)(bp->b_un.b_addr))->df_nfree;
+			bcopy((caddr_t)((FBLKP)(bp->b_un.b_addr))->df_free,
+			    (caddr_t)fp->s_free, sizeof(fp->s_free));
+		}
+		brelse(bp);
+		fp->s_flock = 0;
+		wakeup((caddr_t)&fp->s_flock);
+		if (fp->s_nfree <= 0)
+			goto onospace;
+	}
+	bp = getblk(ip->i_dev, fsbtodb(fs, bno), (int)fs->fs_bsize);
+	clrbuf(bp);
+	fs->fs_fmod = 1;
+	fp->s_tfree--;
+	return (bp);
+
+onospace:
+	fp->s_nfree = 0;
+	fp->s_tfree = 0;
+	goto nospace;
+	}
+#endif	CS_OLDFS
 	if ((unsigned)size > fs->fs_bsize || fragoff(fs, size) != 0) {
 		printf("dev = 0x%x, bsize = %d, size = %d, fs = %s\n",
 		    ip->i_dev, fs->fs_bsize, size, fs->fs_fsmnt);
@@ -90,12 +210,159 @@ alloc(ip, bpref, size)
 	clrbuf(bp);
 	return (bp);
 nospace:
+#if	CS_RPAUSE
+	fsfull(fs, FS_FNOSPC);
+#else	CS_RPAUSE
 	fserr(fs, "file system full");
 	uprintf("\n%s: write failed, file system is full\n", fs->fs_fsmnt);
 	u.u_error = ENOSPC;
+#endif	CS_RPAUSE
 	return (NULL);
 }
 
+
+#if	CS_RPAUSE
+/* 
+ *  fsfull - handle a full file system condition
+ *
+ *  fs    = file system with space exhausted
+ *  which = FS_FNOSPC iff space exhausted, FS_INOSPC iff inodes exhausted
+ *
+ *  If the file system is not currently in a space exhausted condition, log a
+ *  message on the console and prevent any subsequent message until space rises
+ *  above the high water mark or inodes become available.  If resource pauses
+ *  are disabled for the ENOSPC error, log an error message to the user
+ *  terminal (if they are enabled, the message will be provided by the
+ *  fspause() routine when it is invoked).
+ *
+ *  Return: with u_error set to ENOSPC.
+ *
+ *  TODO:   Need to handle case where a file system is dismounted while we are
+ *  asleep.  If we just continue to use the file system pointer which now
+ *  points to a deallocated buffer, we could be in trouble.  This is highly
+ *  unlikely, but ...
+ */
+
+fsfull(fs, which)
+register struct fs *fs;
+int which;
+{
+    char *cmesg;
+    char *umesg;
+
+    if (which&FS_FNOSPC)
+    {
+	cmesg = "file system full";
+	umesg = "write failed, file system is full";
+    }
+    else if (which&FS_INOSPC)
+    {
+	cmesg = "out of inodes";
+	umesg = "create/symlink failed, no inodes free";
+    }
+    else
+	panic("fsfull");
+	
+    if ((fs->fs_flags&which) == 0)
+	fserr(fs, cmesg);
+    fs->fs_flags |= which;	/* no more messages while full */
+    if ((u.u_rpause&URPS_NOSPC) == 0)
+	uprintf("\n%s: %s\n", fs->fs_fsmnt, umesg);
+
+    /*
+     *  Record the file system and type of failure for possible restart by our
+     *  caller.  In case we have taken a nested call, only record the first
+     *  problem (although I'm not sure when this can even happen).
+     */
+    if (u.u_rpsfs == 0)
+    {
+	u.u_rpsfs = fs;
+	u.u_rpswhich = which;
+    }
+    u.u_error = ENOSPC;
+}
+
+
+
+/* 
+ *  fssleep - block until space exceeds the high water mark on a file system
+ *
+ *  fs    = file system with space exhausted
+ *  which = FS_FNOSPC iff disk space exhausted, FS_INOSPC iff out of inodes
+ *
+ *  Sleep (interruptably) waiting for the free fragment or inodes count for the
+ *  file system to execeed the high water mark established at mount time.  This
+ *  routine is called from fspause() via rpause() during a resource pause on a
+ *  full file system.
+ */
+
+fssleep(fs, which)
+register struct fs *fs;
+int which;
+{
+    if (which&FS_FNOSPC)
+    {
+        while (freefrags(fs) <= FS_FHIWAT(fs))
+	    sleep((caddr_t)&fs->fs_cstotal.cs_nffree, PPIPE);
+    }
+    else if (which&FS_INOSPC)
+    {
+        while (freeinodes(fs) <= FS_IHIWAT(fs))
+	    sleep((caddr_t)&fs->fs_cstotal.cs_nifree, PPIPE);
+    }
+    else
+	panic("fssleep");
+}
+ 
+
+
+/* 
+ *  fspause - wait for space on file system
+ *
+ *  This routine is called after the completion of any system call which
+ *  resulted in an error.  If the call terminated due to lack of space or
+ *  inodes, a resource pause is begun until space becomes available again.  In
+ *  this case, the u_rpsfs and u_rpswhich fields of the U area will have been
+ *  set by fsfull() above to indicate the file system and operation which
+ *  failed and must pause.
+ *
+ *  This routine is invoked directly by the common system call handler on an
+ *  error return from the dispatched system call.  It can also be called from
+ *  within a system call routine itself if special handling is required.  To
+ *  prevent nested call problems, the resource pause fields are always cleared
+ *  by the system call handler before dispatching to the system call and on any
+ *  return from this routine.  If they are not set upon entry, the condition is
+ *  presumed to have been handled elsewhere (e.g. by a preceding call at a
+ *  lower level).
+ *
+ *  Return: true with no error if the invoking operation should be retried,
+ *  otherwise false with the appropriate error set if it should be aborted
+ *  (e.g. the error was not a lack of space or the pause is disabled by the
+ *  user or was interrupted by a signal).
+ */
+
+bool
+fspause()
+{
+    register struct fs *fs = u.u_rpsfs;
+    int which = u.u_rpswhich;
+
+    u.u_rpsfs = 0;
+    u.u_rpswhich = 0;
+    if (fs == 0 || which == 0 || u.u_error != ENOSPC || (u.u_rpause&URPS_NOSPC) == 0)
+	return(false);
+
+    u.u_error = 0;
+    if (! rpause(fssleep, (int)fs, which, fs->fs_fsmnt,
+		(which&1) == 0?" out of inodes":" file system is full"))
+    {
+	u.u_error = ENOSPC;
+	return(false);
+    }
+
+    return(true);
+}
+#endif	CS_RPAUSE
 /*
  * Reallocate a fragment to a bigger size
  *
@@ -110,12 +377,10 @@ realloccg(ip, bprev, bpref, osize, nsize)
 	daddr_t bprev, bpref;
 	int osize, nsize;
 {
+	daddr_t bno;
 	register struct fs *fs;
 	register struct buf *bp, *obp;
 	int cg, request;
-	daddr_t bno, bn;
-	int i, count, s;
-	extern struct cmap *mfind();
 	
 	fs = ip->i_fs;
 	if ((unsigned)osize > fs->fs_bsize || fragoff(fs, osize) != 0 ||
@@ -154,49 +419,10 @@ realloccg(ip, bprev, bpref, osize, nsize)
 	}
 	if (bpref >= fs->fs_size)
 		bpref = 0;
-	switch ((int)fs->fs_optim) {
-	case FS_OPTSPACE:
-		/*
-		 * Allocate an exact sized fragment. Although this makes 
-		 * best use of space, we will waste time relocating it if 
-		 * the file continues to grow. If the fragmentation is
-		 * less than half of the minimum free reserve, we choose
-		 * to begin optimizing for time.
-		 */
+	if (fs->fs_optim == FS_OPTSPACE)
 		request = nsize;
-		if (fs->fs_minfree < 5 ||
-		    fs->fs_cstotal.cs_nffree >
-		    fs->fs_dsize * fs->fs_minfree / (2 * 100))
-			break;
-		log(LOG_NOTICE, "%s: optimization changed from SPACE to TIME\n",
-			fs->fs_fsmnt);
-		fs->fs_optim = FS_OPTTIME;
-		break;
-	case FS_OPTTIME:
-		/*
-		 * At this point we have discovered a file that is trying
-		 * to grow a small fragment to a larger fragment. To save
-		 * time, we allocate a full sized block, then free the 
-		 * unused portion. If the file continues to grow, the 
-		 * `fragextend' call above will be able to grow it in place
-		 * without further copying. If aberrant programs cause
-		 * disk fragmentation to grow within 2% of the free reserve,
-		 * we choose to begin optimizing for space.
-		 */
+	else /* if (fs->fs_optim == FS_OPTTIME) */
 		request = fs->fs_bsize;
-		if (fs->fs_cstotal.cs_nffree <
-		    fs->fs_dsize * (fs->fs_minfree - 2) / 100)
-			break;
-		log(LOG_NOTICE, "%s: optimization changed from TIME to SPACE\n",
-			fs->fs_fsmnt);
-		fs->fs_optim = FS_OPTSPACE;
-		break;
-	default:
-		printf("dev = 0x%x, optim = %d, fs = %s\n",
-		    ip->i_dev, fs->fs_optim, fs->fs_fsmnt);
-		panic("realloccg: bad optim");
-		/* NOTREACHED */
-	}
 	bno = (daddr_t)hashalloc(ip, cg, (long)bpref, request,
 		(u_long (*)())alloccg);
 	if (bno > 0) {
@@ -205,15 +431,8 @@ realloccg(ip, bprev, bpref, osize, nsize)
 			brelse(obp);
 			return (NULL);
 		}
-		bn = fsbtodb(fs, bno);
-		bp = getblk(ip->i_dev, bn, nsize);
+		bp = getblk(ip->i_dev, fsbtodb(fs, bno), nsize);
 		bcopy(obp->b_un.b_addr, bp->b_un.b_addr, (u_int)osize);
-		count = howmany(osize, DEV_BSIZE);
-		s = splimp();
-		for (i = 0; i < count; i += CLBYTES / DEV_BSIZE)
-			if (mfind(ip->i_dev, bn + i))
-				munhash(ip->i_dev, bn + i);
-		splx(s);
 		bzero(bp->b_un.b_addr + osize, (unsigned)nsize - osize);
 		if (obp->b_flags & B_DELWRI) {
 			obp->b_flags &= ~B_DELWRI;
@@ -232,9 +451,13 @@ nospace:
 	/*
 	 * no space available
 	 */
+#if	CS_RPAUSE
+	fsfull(fs, "file system full");
+#else	CS_RPAUSE
 	fserr(fs, "file system full");
 	uprintf("\n%s: write failed, file system is full\n", fs->fs_fsmnt);
 	u.u_error = ENOSPC;
+#endif	CS_RPAUSE
 	return (NULL);
 }
 
@@ -265,6 +488,124 @@ ialloc(pip, ipref, mode)
 	int cg;
 	
 	fs = pip->i_fs;
+#if	CS_OLDFS
+	/*
+	 * Old format:
+	 *
+	 * Allocate an unused inode on the specified device.
+	 * Used with file creation.  The algorithm keeps up to
+	 * NICINOD spare inodes in the super block.  When this runs out,
+	 * the inodes are searched to pick up more.  We keep searching
+	 * foreward on the device, remembering the number of inodes
+	 * which are freed behind our search point for which there is no
+	 * room in the in-core table.  When this number passes a threshold
+	 * (or if we search to the end of the ilist without finding any inodes)
+	 * we restart the search from the beginning.
+	 */
+	if (isoldfs(fs))
+	{
+	register struct filsys *fp;
+	register struct buf *bp;
+	int i;
+	struct oinode *oi;
+	ino_t inobas;
+	int first;
+	daddr_t adr;
+
+	fp = fs->fs_oldfs;
+	while (fp->s_ilock)
+		sleep((caddr_t)&fp->s_ilock, PINOD);
+loop:
+	if (fp->s_ninode > 0) {
+#if	CS_RPAUSE
+		if (u.u_uid != 0 && fp->s_tinode <= FS_ILOWAT(fs))
+			goto noinodes;
+#endif	CS_RPAUSE
+		ino = fp->s_inode[--fp->s_ninode];
+		ip = iget(pip->i_dev, fs, ino);
+		if (ip == NULL)
+			return(NULL);
+		if (ip->i_mode == 0) {
+			for (i=0; i<(NDADDR+NIADDR); i++)
+				ip->i_db[i] = 0;
+			fs->fs_fmod = 1;
+			fp->s_tinode--;
+			return(ip);
+		}
+		/*
+		 * Inode was allocated after all.
+		 * Look some more.
+		 */
+		iput(ip);
+		goto loop;
+	}
+	fp->s_ilock++;
+	/*
+	 * If less than 4*NICINOD inodes are known
+	 * to be free behind the current search point,
+	 * then search forward; else search from beginning.
+	 */
+	if (fp->s_nbehind < 4 * NICINOD) {
+		first = 1;
+		ino = fp->s_lasti;
+		if (itooo(fs, ino))
+			panic("ialloc");
+		adr = itod(fs, ino);
+	} else {
+fromtop:
+		first = 0;
+		ino = 1;
+		adr = SUPERB+1;
+		fp->s_nbehind = 0;
+	}
+	/*
+	 * This is the search for free inodes.
+	 */
+	for(; adr < fp->s_isize; adr++) {
+		inobas = ino;
+		bp = bread(pip->i_dev, fsbtodb(fs, adr), (int)fs->fs_bsize);
+		if ((bp->b_flags&B_CACHE) == 0)
+			u.u_ru.ru_inblock--;		/* no charge! */
+		if (bp->b_flags & B_ERROR) {
+			brelse(bp);
+			ino += INOPB(fs);
+			continue;
+		}
+		oi = (struct oinode *)bp->b_un.b_dino;
+		for (i=0; i<INOPB(fs); i++) {
+			extern struct inode *ifind();
+
+			if (oi->oi_mode != 0 || ifind(pip->i_dev, ino))
+				goto cont;
+			fp->s_inode[fp->s_ninode++] = ino;
+			if (fp->s_ninode >= NICINOD)
+				break;
+		cont:
+			ino++;
+			oi++;
+		}
+		brelse(bp);
+		if (fp->s_ninode >= NICINOD)
+			break;
+	}
+	/*
+	 * If the search didn't net a full superblock of inodes,
+	 * then try it again from the beginning of the ilist.
+	 */
+	if (fp->s_ninode < NICINOD && first)
+		goto fromtop;
+	fp->s_lasti = inobas;
+	fp->s_ilock = 0;
+	wakeup((caddr_t)&fp->s_ilock);
+	if (fp->s_ninode > 0)
+		goto loop;
+	goto noinodes;
+	}
+#endif	CS_OLDFS
+#if	CS_RPAUSE
+	if (u.u_uid != 0 && fs->fs_cstotal.cs_nifree <= FS_ILOWAT(fs))
+		goto noinodes;
+#endif	CS_RPAUSE
 	if (fs->fs_cstotal.cs_nifree == 0)
 		goto noinodes;
 #ifdef QUOTA
@@ -293,11 +634,18 @@ ialloc(pip, ipref, mode)
 		    fs->fs_fsmnt, ino, ip->i_blocks);
 		ip->i_blocks = 0;
 	}
+#if	NWB_SENS > 0
+ 	INodeCreate(ip->i_dev,ip->i_number);
+#endif	NWB_SENS > 0
 	return (ip);
 noinodes:
+#if	CS_RPAUSE
+	fsfull(fs, FS_INOSPC);
+#else	CS_RPAUSE
 	fserr(fs, "out of inodes");
 	uprintf("\n%s: create/symlink failed, no inodes free\n", fs->fs_fsmnt);
 	u.u_error = ENOSPC;
+#endif	CS_RPAUSE
 	return (NULL);
 }
 
@@ -314,6 +662,10 @@ dirpref(fs)
 {
 	int cg, minndir, mincg, avgifree;
 
+#if	CS_OLDFS
+	if (isoldfs(fs))
+		return(0);
+#endif	CS_OLDFS
 	avgifree = fs->fs_cstotal.cs_nifree / fs->fs_ncg;
 	minndir = fs->fs_ipg;
 	mincg = 0;
@@ -827,6 +1179,50 @@ free(ip, bno, size)
 	register int i;
 
 	fs = ip->i_fs;
+#if	CS_OLDFS
+	/*
+ 	 * old format:
+	 *
+	 * place the specified disk block
+	 * back on the free list of the
+	 * specified device.
+	 */
+	if (isoldfs(fs))
+	{
+	register struct filsys *fp;
+
+	fp = fs->fs_oldfs;
+	fs->fs_fmod = 1;
+	while (fp->s_flock)
+		sleep((caddr_t)&fp->s_flock, PINOD);
+	if (badblock(fs, bno))
+		return;
+	if (fp->s_nfree <= 0) {
+		fp->s_nfree = 1;
+		fp->s_free[0] = 0;
+	}
+	if (fp->s_nfree >= NICFREE) {
+		fp->s_flock++;
+		bp = getblk(ip->i_dev, fsbtodb(fs, bno), (int)fs->fs_bsize);
+		((FBLKP)(bp->b_un.b_addr))->df_nfree = fp->s_nfree;
+		bcopy((caddr_t)fp->s_free,
+		    (caddr_t)((FBLKP)(bp->b_un.b_addr))->df_free,
+		    sizeof(fp->s_free));
+		fp->s_nfree = 0;
+		bwrite(bp);
+		fp->s_flock = 0;
+		wakeup((caddr_t)&fp->s_flock);
+	}
+	fp->s_free[fp->s_nfree++] = bno;
+	++(fp->s_tfree);
+	fs->fs_fmod = 1;
+#if	CS_RPAUSE
+	goto out;
+#else	CS_RPAUSE
+	return;
+#endif	CS_RPAUSE
+	}
+#endif	CS_OLDFS
 	if ((unsigned)size > fs->fs_bsize || fragoff(fs, size) != 0) {
 		printf("dev = 0x%x, bsize = %d, size = %d, fs = %s\n",
 		    ip->i_dev, fs->fs_bsize, size, fs->fs_fsmnt);
@@ -902,6 +1298,14 @@ free(ip, bno, size)
 	}
 	fs->fs_fmod++;
 	bdwrite(bp);
+#if	CS_RPAUSE
+out:
+	if ((fs->fs_flags&FS_FNOSPC) && freefrags(fs) > FS_FHIWAT(fs))
+	{
+		wakeup((caddr_t)&fs->fs_cstotal.cs_nffree);
+		fs->fs_flags &= ~FS_FNOSPC;
+	}
+#endif	CS_RPAUSE
 }
 
 /*
@@ -920,11 +1324,56 @@ ifree(ip, ino, mode)
 	int cg;
 
 	fs = ip->i_fs;
+#if	CS_OLDFS
+	/*
+	 * Old format:
+	 *
+	 * Free the specified inode on the specified device.
+	 * The algorithm stores up to NICINOD inodes in the super
+	 * block and throws away any more.  It keeps track of the
+	 * number of inodes thrown away which preceded the current
+	 * search point in the file system.  This lets us rescan
+	 * for more inodes from the beginning only when there
+	 * are a reasonable number of inodes back there to reallocate.
+	 */
+	if (isoldfs(fs))
+	{
+	register struct filsys *fp;
+
+	fp = fs->fs_oldfs;
+	fp->s_tinode++;
+	if (fp->s_ilock)
+#if	CS_RPAUSE
+		goto out;
+#else	CS_RPAUSE
+		return;
+#endif	CS_RPAUSE
+	if (fp->s_ninode >= NICINOD) {
+		if (fp->s_lasti > ino)
+			fp->s_nbehind++;
+#if	CS_RPAUSE
+		goto out;
+#else	CS_RPAUSE
+		return;
+#endif	CS_RPAUSE
+	}
+	fp->s_inode[fp->s_ninode++] = ino;
+	fs->fs_fmod = 1;
+#if	CS_RPAUSE
+	goto out;
+#else	CS_RPAUSE
+	return;
+#endif	CS_RPAUSE
+	}
+#endif	CS_OLDFS
 	if ((unsigned)ino >= fs->fs_ipg*fs->fs_ncg) {
 		printf("dev = 0x%x, ino = %d, fs = %s\n",
 		    ip->i_dev, ino, fs->fs_fsmnt);
 		panic("ifree: range");
 	}
+#if	NWB_SENS > 0
+	INodeDelete(ip->i_dev,ip->i_number);
+#endif	NWB_SENS > 0
 	cg = itog(fs, ino);
 	bp = bread(ip->i_dev, fsbtodb(fs, cgtod(fs, cg)), (int)fs->fs_cgsize);
 	cgp = bp->b_un.b_cg;
@@ -952,6 +1401,14 @@ ifree(ip, ino, mode)
 	}
 	fs->fs_fmod++;
 	bdwrite(bp);
+#if	CS_RPAUSE
+out:
+	if ((fs->fs_flags&FS_INOSPC) && freeinodes(fs) > FS_IHIWAT(fs))
+	{
+		wakeup((caddr_t)&fs->fs_cstotal.cs_nifree);
+		fs->fs_flags &= ~FS_INOSPC;
+	}
+#endif	CS_RPAUSE
 }
 
 /*

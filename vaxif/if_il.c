@@ -1,13 +1,39 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)if_il.c	7.1 (Berkeley) 6/5/86
+ *	@(#)if_il.c	6.9 (Berkeley) 9/16/85
  */
 
 #include "il.h"
-#if NIL > 0
 
 /*
  * Interlan Ethernet Communications Controller interface
@@ -28,12 +54,19 @@
 #include "../net/netisr.h"
 #include "../net/route.h"
 
+#ifdef	BBNNET
+#define	INET
+#endif
 #ifdef INET
 #include "../netinet/in.h"
 #include "../netinet/in_systm.h"
 #include "../netinet/in_var.h"
 #include "../netinet/ip.h"
 #include "../netinet/if_ether.h"
+#endif
+
+#ifdef PUP
+#include "../netpup/pup.h"
 #endif
 
 #ifdef NS
@@ -56,7 +89,6 @@ struct	uba_driver ildriver =
 	{ ilprobe, 0, ilattach, 0, ilstd, "il", ilinfo };
 #define	ILUNIT(x)	minor(x)
 int	ilinit(),iloutput(),ilioctl(),ilreset(),ilwatch();
-int	ildebug = 0;
 
 /*
  * Ethernet software status per interface.
@@ -79,8 +111,6 @@ struct	il_softc {
 #define	ILF_OACTIVE	0x1		/* output is active */
 #define	ILF_RCVPENDING	0x2		/* start rcv in ilcint */
 #define	ILF_STATPENDING	0x4		/* stat cmd pending */
-#define	ILF_RUNNING	0x8		/* board is running */
-#define	ILF_SETADDR	0x10		/* physical address is changed */
 	short	is_lastcmd;		/* can't read csr, so must save it */
 	short	is_scaninterval;	/* interval of stat collection */
 #define	ILWATCHINTERVAL	60		/* once every 60 seconds */
@@ -132,44 +162,42 @@ ilattach(ui)
 	 * buffer onto the Unibus.
 	 */
 	addr->il_csr = ILC_RESET;
-	(void)ilwait(ui, "reset");
+	while ((addr->il_csr&IL_CDONE) == 0)
+		;
+	if (addr->il_csr&IL_STATUS)
+		printf("il%d: reset failed, csr=%b\n", ui->ui_unit,
+			addr->il_csr, IL_BITS);
 	
 	is->is_ubaddr = uballoc(ui->ui_ubanum, (caddr_t)&is->is_stats,
 	    sizeof (struct il_stats), 0);
 	addr->il_bar = is->is_ubaddr & 0xffff;
 	addr->il_bcr = sizeof (struct il_stats);
 	addr->il_csr = ((is->is_ubaddr >> 2) & IL_EUA)|ILC_STAT;
-	(void)ilwait(ui, "status");
+	while ((addr->il_csr&IL_CDONE) == 0)
+		;
+	if (addr->il_csr&IL_STATUS)
+		printf("il%d: status failed, csr=%b\n", ui->ui_unit,
+			addr->il_csr, IL_BITS);
 	ubarelse(ui->ui_ubanum, &is->is_ubaddr);
-	if (ildebug)
-		printf("il%d: module=%s firmware=%s\n", ui->ui_unit,
-			is->is_stats.ils_module, is->is_stats.ils_firmware);
+#ifdef notdef
+	printf("il%d: addr=%x:%x:%x:%x:%x:%x module=%s firmware=%s\n",
+		ui->ui_unit,
+		is->is_stats.ils_addr[0]&0xff, is->is_stats.ils_addr[1]&0xff,
+		is->is_stats.ils_addr[2]&0xff, is->is_stats.ils_addr[3]&0xff,
+		is->is_stats.ils_addr[4]&0xff, is->is_stats.ils_addr[5]&0xff,
+		is->is_stats.ils_module, is->is_stats.ils_firmware);
+#endif
  	bcopy((caddr_t)is->is_stats.ils_addr, (caddr_t)is->is_addr,
  	    sizeof (is->is_addr));
-	printf("il%d: hardware address %s\n", ui->ui_unit,
-		ether_sprintf(is->is_addr));
 	ifp->if_init = ilinit;
 	ifp->if_output = iloutput;
 	ifp->if_ioctl = ilioctl;
 	ifp->if_reset = ilreset;
 	is->is_ifuba.ifu_flags = UBA_CANTWAIT;
+#ifdef notdef
+	is->is_ifuba.ifu_flags |= UBA_NEEDBDP;
+#endif
 	if_attach(ifp);
-}
-
-ilwait(ui, op)
-	struct uba_device *ui;
-	char *op;
-{
-	register struct ildevice *addr = (struct ildevice *)ui->ui_addr;
-
-	while ((addr->il_csr&IL_CDONE) == 0)
-		;
-	if (addr->il_csr&IL_STATUS) {
-		printf("il%d: %s failed, csr=%b\n", ui->ui_unit, op,
-			addr->il_csr, IL_BITS);
-		return (-1);
-	}
-	return (0);
 }
 
 /*
@@ -185,8 +213,6 @@ ilreset(unit, uban)
 	    ui->ui_ubanum != uban)
 		return;
 	printf(" il%d", unit);
-	il_softc[unit].is_if.if_flags &= ~IFF_RUNNING;
-	il_softc[unit].is_flags &= ~ILF_RUNNING;
 	ilinit(unit);
 }
 
@@ -206,19 +232,17 @@ ilinit(unit)
 	/* not yet, if address still unknown */
 	if (ifp->if_addrlist == (struct ifaddr *)0)
 		return;
-	if (is->is_flags & ILF_RUNNING)
-		return;
 
-	if ((ifp->if_flags & IFF_RUNNING) == 0) {
-		if (if_ubainit(&is->is_ifuba, ui->ui_ubanum,
-		    sizeof (struct il_rheader), (int)btoc(ETHERMTU)) == 0) { 
-			printf("il%d: can't initialize\n", unit);
-			is->is_if.if_flags &= ~IFF_UP;
-			return;
-		}
-		is->is_ubaddr = uballoc(ui->ui_ubanum, (caddr_t)&is->is_stats,
-		    sizeof (struct il_stats), 0);
+	if (ifp->if_flags & IFF_RUNNING)
+		return;
+	if (if_ubainit(&is->is_ifuba, ui->ui_ubanum,
+	    sizeof (struct il_rheader), (int)btoc(ETHERMTU)) == 0) { 
+		printf("il%d: can't initialize\n", unit);
+		is->is_if.if_flags &= ~IFF_UP;
+		return;
 	}
+	is->is_ubaddr = uballoc(ui->ui_ubanum, (caddr_t)&is->is_stats,
+	    sizeof (struct il_stats), 0);
 	ifp->if_watchdog = ilwatch;
 	is->is_scaninterval = ILWATCHINTERVAL;
 	ifp->if_timer = is->is_scaninterval;
@@ -231,46 +255,17 @@ ilinit(unit)
 	 * first.
 	 */
 	s = splimp();
-	addr->il_csr = ILC_RESET;
-	if (ilwait(ui, "hardware diag")) {
- 		is->is_if.if_flags &= ~IFF_UP;
- 		splx(s);
- 		return;
- 	}
+	addr->il_csr = ILC_OFFLINE;
+	while ((addr->il_csr & IL_CDONE) == 0)
+		;
 	addr->il_csr = ILC_CISA;
 	while ((addr->il_csr & IL_CDONE) == 0)
 		;
 	/*
-	 * If we must reprogram this board's physical ethernet
-	 * address (as for secondary XNS interfaces), we do so
-	 * before putting it on line, and starting receive requests.
-	 * If you try this on an older 1010 board, it will total
-	 * wedge the board.
-	 */
-	if (is->is_flags & ILF_SETADDR) {
-		bcopy((caddr_t)is->is_addr, (caddr_t)&is->is_stats,
-							sizeof is->is_addr);
-		addr->il_bar = is->is_ubaddr & 0xffff;
-		addr->il_bcr = sizeof is->is_addr;
-		addr->il_csr = ((is->is_ubaddr >> 2) & IL_EUA)|ILC_LDPA;
-		if (ilwait(ui, "setaddr"))
-			return;
-		addr->il_bar = is->is_ubaddr & 0xffff;
-		addr->il_bcr = sizeof (struct il_stats);
-		addr->il_csr = ((is->is_ubaddr >> 2) & IL_EUA)|ILC_STAT;
-		if (ilwait(ui, "verifying setaddr"))
-			return;
-		if (bcmp((caddr_t)is->is_stats.ils_addr, (caddr_t)is->is_addr,
-						sizeof (is->is_addr)) != 0) {
-			printf("il%d: setaddr didn't work\n", ui->ui_unit);
-			return;
-		}
-	}
-	/*
 	 * Set board online.
 	 * Hang receive buffer and start any pending
 	 * writes by faking a transmit complete.
-	 * Receive bcr is not a multiple of 8 so buffer
+	 * Receive bcr is not a muliple of 4 so buffer
 	 * chaining can't happen.
 	 */
 	addr->il_csr = ILC_ONLINE;
@@ -284,7 +279,6 @@ ilinit(unit)
 		;
 	is->is_flags = ILF_OACTIVE;
 	is->is_if.if_flags |= IFF_RUNNING;
-	is->is_flags |= ILF_RUNNING;
 	is->is_lastcmd = 0;
 	ilcint(unit);
 	splx(s);
@@ -362,16 +356,12 @@ ilcint(unit)
 	 * be done earlier (in ilrint).
 	 */
 	if (is->is_flags & ILF_RCVPENDING) {
-		int s;
-
 		addr->il_bar = is->is_ifuba.ifu_r.ifrw_info & 0xffff;
 		addr->il_bcr = sizeof(struct il_rheader) + ETHERMTU + 6;
 		addr->il_csr =
 		  ((is->is_ifuba.ifu_r.ifrw_info >> 2) & IL_EUA)|ILC_RCV|IL_RIE;
-		s = splhigh();
 		while ((addr->il_csr & IL_CDONE) == 0)
 			;
-		splx(s);
 		is->is_flags &= ~ILF_RCVPENDING;
 	}
 	is->is_flags &= ~ILF_OACTIVE;
@@ -515,10 +505,8 @@ setup:
 	addr->il_bcr = sizeof(struct il_rheader) + ETHERMTU + 6;
 	addr->il_csr =
 		((is->is_ifuba.ifu_r.ifrw_info >> 2) & IL_EUA)|ILC_RCV|IL_RIE;
-	s = splhigh();
 	while ((addr->il_csr & IL_CDONE) == 0)
 		;
-	splx(s);
 }
 
 /*
@@ -539,21 +527,18 @@ iloutput(ifp, m0, dst)
 	register struct mbuf *m = m0;
 	register struct ether_header *il;
 	register int off;
-	int usetrailers;
 
-	if ((ifp->if_flags & (IFF_UP|IFF_RUNNING)) != (IFF_UP|IFF_RUNNING)) {
-		error = ENETDOWN;
-		goto bad;
-	}
 	switch (dst->sa_family) {
 
 #ifdef INET
 	case AF_INET:
 		idst = ((struct sockaddr_in *)dst)->sin_addr;
- 		if (!arpresolve(&is->is_ac, m, &idst, edst, &usetrailers))
+ 		if (!arpresolve(&is->is_ac, m, &idst, edst))
 			return (0);	/* if not yet resolved */
 		off = ntohs((u_short)mtod(m, struct ip *)->ip_len) - m->m_len;
-		if (usetrailers && off > 0 && (off & 0x1ff) == 0 &&
+		/* need per host negotiation */
+		if ((ifp->if_flags & IFF_NOTRAILERS) == 0)
+		if (off > 0 && (off & 0x1ff) == 0 &&
 		    m->m_off >= MMINOFF + 2 * sizeof (u_short)) {
 			type = ETHERTYPE_TRAIL + (off>>9);
 			m->m_off -= 2 * sizeof (u_short);
@@ -694,7 +679,6 @@ ilioctl(ifp, cmd, data)
 	caddr_t data;
 {
 	register struct ifaddr *ifa = (struct ifaddr *)data;
-	register struct il_softc *is = &il_softc[ifp->if_unit];
 	int s = splimp(), error = 0;
 
 	switch (cmd) {
@@ -713,31 +697,12 @@ ilioctl(ifp, cmd, data)
 #endif
 #ifdef NS
 		case AF_NS:
-		    {
-			register struct ns_addr *ina = &(IA_SNS(ifa)->sns_addr);
-			
-			if (ns_nullhost(*ina)) {
-				ina->x_host = * (union ns_host *) 
+			IA_SNS(ifa)->sns_addr.x_host =
+				* (union ns_host *) 
 				     (il_softc[ifp->if_unit].is_addr);
-			} else {
-				il_setaddr(ina->x_host.c_host, ifp->if_unit);
-				return (0);
-			}
 			break;
-		    }
 #endif
 		}
-		break;
-
-	case SIOCSIFFLAGS:
-		if ((ifp->if_flags & IFF_UP) == 0 &&
-		    is->is_flags & ILF_RUNNING) {
-			((struct ildevice *)
-			   (ilinfo[ifp->if_unit]->ui_addr))->il_csr = ILC_RESET;
-			is->is_flags &= ~ILF_RUNNING;
-		} else if (ifp->if_flags & IFF_UP &&
-		    (is->is_flags & ILF_RUNNING) == 0)
-			ilinit(ifp->if_unit);
 		break;
 
 	default:
@@ -746,22 +711,3 @@ ilioctl(ifp, cmd, data)
 	splx(s);
 	return (error);
 }
-
-/*
- * set ethernet address for unit
- */
-il_setaddr(physaddr, unit)
-u_char *physaddr;
-int unit;
-{
-	register struct il_softc *is = &il_softc[unit];
-	
-	if (! (is->is_flags & ILF_RUNNING))
-		return;
-		
-	bcopy((caddr_t)physaddr, (caddr_t)is->is_addr, sizeof is->is_addr);
-	is->is_flags &= ~ILF_RUNNING;
-	is->is_flags |= ILF_SETADDR;
-	ilinit(unit);
-}
-#endif

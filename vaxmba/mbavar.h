@@ -1,9 +1,36 @@
 /*
- * Copyright (c) 1982, 1986 Regents of the University of California.
+ ****************************************************************
+ * Mach Operating System
+ * Copyright (c) 1986 Carnegie-Mellon University
+ *  
+ * This software was developed by the Mach operating system
+ * project at Carnegie-Mellon University's Department of Computer
+ * Science. Software contributors as of May 1986 include Mike Accetta, 
+ * Robert Baron, William Bolosky, Jonathan Chew, David Golub, 
+ * Glenn Marcy, Richard Rashid, Avie Tevanian and Michael Young. 
+ * 
+ * Some software in these files are derived from sources other
+ * than CMU.  Previous copyright and other source notices are
+ * preserved below and permission to use such software is
+ * dependent on licenses from those institutions.
+ * 
+ * Permission to use the CMU portion of this software for 
+ * any non-commercial research and development purpose is
+ * granted with the understanding that appropriate credit
+ * will be given to CMU, the Mach project and its authors.
+ * The Mach project would appreciate being notified of any
+ * modifications and of redistribution of this software so that
+ * bug fixes and enhancements may be distributed to users.
+ *
+ * All other rights are reserved to Carnegie-Mellon University.
+ ****************************************************************
+ */
+/*
+ * Copyright (c) 1982 Regents of the University of California.
  * All rights reserved.  The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  *
- *	@(#)mbavar.h	7.1 (Berkeley) 6/5/86
+ *	@(#)mbavar.h	6.2 (Berkeley) 6/8/85
  */
 
 /*
@@ -67,8 +94,6 @@ struct	mba_device {
 	struct	mba_hd *mi_hd;
 };
 
-#define	b_bdone	b_bufsize		/* redefinition for mi_tab XXX */
-
 /*
  * Tape formatter slaves are specified by
  * the following information which is used
@@ -116,7 +141,6 @@ struct mba_driver {
 #define	MBD_DONE	0		/* data transfer complete */
 #define	MBD_RETRY	1		/* error occurred, please retry */
 #define	MBD_RESTARTED	2		/* driver restarted i/o itself */
-#define	MBD_REPOSITION	3		/* driver started unit, not transfer */
 
 /*
  * Possible return values from non-data-transfer interrupt handling routines
